@@ -1,0 +1,55 @@
+# push 到 main 即自动：测试 → 构建 → 发布产物到孤儿 release 分支 → 按 OLM_VERSION 打 tag → 刷新 jsDelivr
+# main 始终只有源码；构建产物只存在于 release 分支（openlist-media.js / custom-content.html）。
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build & Test (node)
+        run: |
+          sh build.sh
+          node --version
+          cat dist/openlist-media.js tests/core.test.js | node - | tee /tmp/test.out
+          grep -q "ALL TESTS PASSED" /tmp/test.out
+
+      - name: Publish release branch & tag
+        run: |
+          VERSION=$(sed -n 's/.*OLM_VERSION = "\([^"]*\)".*/\1/p' src/01-consts.js | head -1)
+          echo "version: v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin release:refs/remotes/origin/release 2>/dev/null || true
+          PARENT=$(git rev-parse -q --verify refs/remotes/origin/release || true)
+          B1=$(git hash-object -w dist/custom-content.html)
+          B2=$(git hash-object -w dist/openlist-media.js)
+          TREE=$(printf '100644 blob %s\tcustom-content.html\n100644 blob %s\topenlist-media.js\n' "$B1" "$B2" | git mktree)
+          if [ -n "$PARENT" ] && [ "$(git rev-parse "$PARENT^{tree}")" = "$TREE" ]; then
+            echo "产物与上次发布相同，release 分支不新增提交"
+            COMMIT=$PARENT
+          elif [ -n "$PARENT" ]; then
+            COMMIT=$(git commit-tree "$TREE" -p "$PARENT" -m "release v$VERSION ($GITHUB_SHA)")
+          else
+            COMMIT=$(git commit-tree "$TREE" -m "release v$VERSION ($GITHUB_SHA)")
+          fi
+          git push origin "$COMMIT:refs/heads/release"
+          if git ls-remote --exit-code origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "tag v$VERSION 已存在，跳过（发新版请修改 src/01-consts.js 的 OLM_VERSION）"
+          else
+            git tag "v$VERSION" "$COMMIT"
+            git push origin "v$VERSION"
+          fi
+
+      - name: Purge jsDelivr cache
+        run: |
+          curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@release/openlist-media.js" || true
+          curl -fsS "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@release/custom-content.html" || true
