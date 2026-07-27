@@ -1,5 +1,7 @@
 # openlist-media — OpenList 影视智能整理（纯前端）
 
+> 项目地址：<https://github.com/zhangwt-cn/openlist-media>
+
 一段注入 OpenList「自定义头部/自定义内容」的纯前端脚本：在 OpenList 页面里直接对网盘中的影视文件做
 **AI 解析 → TMDB 元数据校准 → Emby 规范重命名**，全程预览确认、限速执行、支持一键撤销。
 
@@ -23,50 +25,45 @@
 
 ## 安装
 
-先构建（`dist/` 不入库，随用随构建；或直接取 GitHub `release` 分支上的产物）：
+任选其一（都在 OpenList **管理后台 → 设置 → 全局**）：
 
-```sh
-sh build.sh        # 产出 dist/openlist-media.js 和 dist/custom-content.html
-```
+### 方式 A：直接引用本项目 CDN 地址（零构建零部署，推荐）
 
-以下三种方式任选其一（都在 OpenList **管理后台 → 设置 → 全局**）：
-
-### 方式 A：自定义内容（内联粘贴，最简单）
-
-把 `dist/custom-content.html` 的**全部内容**（`<script>…</script>`）粘贴到「自定义内容」，保存后刷新前台页面。
-
-> 脚本约 170KB。SQLite（默认）部署没问题；若 OpenList 使用 MySQL 且保存后不生效，可能是设置字段长度受限，请改用方式 B/C 外链引用。
-
-### 方式 B：jsDelivr CDN 外链（推荐，便于更新）
-
-把本仓库推到 **GitHub 公开仓库**后，jsDelivr 可直接分发。仓库布局保持干净：
-`main` 只有源码（`dist/` 在 .gitignore 里）；构建产物由 `release.sh` 发布到独立的孤儿 **`release` 分支**（只含
-`openlist-media.js` 与 `custom-content.html` 两个文件），版本标签打在该分支上。
-
-**发布全自动**：仓库内置 GitHub Actions（`.github/workflows/release.yml`），把源码 push 到 `main` 后 CI 会自动
-测试→构建→更新 `release` 分支→按 `OLM_VERSION` 打 tag→刷新 jsDelivr 缓存。日常升级 = 改代码（记得改
-`src/01-consts.js` 的 `OLM_VERSION`）→ `git push`，其余不用管。
-（`release.sh` 是等价的本地手动发布脚本，CI 不可用时备用。）
-
-然后在「自定义头部」加入地址，例如：
+在「自定义头部」加入一行，保存后刷新前台即可：
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/<你的用户名>/openlist-media@v0.1.0/openlist-media.js" defer></script>
+<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@v0.1.0/openlist-media.js" defer></script>
 ```
 
-- 固定版本地址（`@v0.1.0`）永久缓存、加载最快；发新版后把设置里的版本号换掉
-- 想「设置只填一次」就用 `@release/openlist-media.js` 跟随最新发布，代价是 jsDelivr 分支引用有最长 12 小时缓存（`release.sh` 每次发布会主动 purge）
-- 大陆网络 `cdn.jsdelivr.net` 不稳时换镜像域名：`fastly.jsdelivr.net` / `gcore.jsdelivr.net`（路径不变）
-
-### 方式 C：用 OpenList 自己托管脚本
-
-把 `dist/openlist-media.js` 上传到 OpenList 挂载的某个目录（如本地存储 `/scripts/`），在「自定义头部」引用它的直链：
+- 大陆网络 `cdn.jsdelivr.net` 不稳时换镜像域名（路径不变）：`fastly.jsdelivr.net` / `gcore.jsdelivr.net`
+- 想「设置只填一次、升级自动生效」就用跟随最新版的地址（有最长 12 小时 CDN 缓存延迟）：
 
 ```html
-<script src="/d/scripts/openlist-media.js" defer></script>
+<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@release/openlist-media.js" defer></script>
 ```
 
-> 注意：如果开启了「签名所有」，`/d/` 直链需要签名参数会导致加载失败——请把该目录设为公开可读且关闭签名，或改用方式 A/B。
+### 方式 B：内联粘贴 custom-content.html（内网 / 不想依赖外部 CDN）
+
+`custom-content.html` 就是构建产物 `openlist-media.js` 外面包了一层 `<script>…</script>` 的**可直接粘贴版本**，
+专供此方式使用——适合 OpenList 部署在内网、访客网络到不了公共 CDN、或不想引入任何外链的场景，功能与方式 A 完全一致。
+
+把它的**全部内容**粘贴到「自定义内容」，保存后刷新。获取途径二选一：
+
+- 从仓库 [`release` 分支](https://github.com/zhangwt-cn/openlist-media/tree/release) 下载现成的
+- 本地构建：`sh build.sh` 后取 `dist/custom-content.html`
+
+> 内容约 170KB。SQLite（默认）部署没问题；若 OpenList 用 MySQL 且保存后不生效，多半是设置字段长度受限，请改用方式 A。
+> 缺点是升级需要重新粘贴。
+
+### 方式 C：Fork 自行托管（二次开发）
+
+Fork 本仓库，改完代码 `git push` 即完成发布——内置 GitHub Actions 会自动
+测试→构建→把产物发布到你自己仓库的孤儿 `release` 分支→按 `src/01-consts.js` 的 `OLM_VERSION` 打 tag→刷新 jsDelivr 缓存
+（`main` 始终只有源码，`dist/` 不入库；`release.sh` 是 CI 不可用时的本地等价脚本）。
+然后把方式 A 地址里的用户名换成你自己的即可。
+
+也可以把构建出的 `openlist-media.js` 上传到 OpenList 挂载的目录，用 `/d/xxx/openlist-media.js` 直链在「自定义头部」引用
+（若开启「签名所有」，`/d/` 直链会因缺签名而加载失败，需将该目录设为公开且关闭签名）。
 
 安装后，**已登录用户**会在页面右下角看到 🎬 悬浮按钮（未登录访客看不到入口）。
 
