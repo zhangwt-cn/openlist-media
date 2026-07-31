@@ -63,6 +63,7 @@ function olmPosterUrl(posterPath, w) {
 
 function olmStatusChip(it) {
   if (it.status === "ok") {
+    if (it.action === "delete") return `<span class="olm-chip red">删除</span>`;
     var label = it.action === "trash" ? "→回收站" : (it.action === "rename" ? "改名" : "移动");
     return `<span class="olm-chip green">${label}</span>`;
   }
@@ -117,6 +118,7 @@ function olmRenderOrganize() {
   var modeDesc = s.organize.targetMode === "custom"
     ? `整理到指定媒体库目录（电影 → <b>${escHtml(s.organize.movieDir || "(未设置，用原目录)")}</b>，剧集 → <b>${escHtml(s.organize.tvDir || "(未设置，用原目录)")}</b>）`
     : "在所选目录内就地整理";
+  var junkDesc = { trash: "移入回收站", delete: "直接删除（执行前确认）" }[s.organize.junkAction] || "忽略";
 
   return `
   ${warns}
@@ -129,10 +131,18 @@ function olmRenderOrganize() {
         <button class="olm-btn" data-act="useCurrentDir" style="flex:none" title="使用当前 OpenList 页面所在目录">当前目录</button>
       </div>
     </div>
+    <div class="olm-field">
+      <label>整理到目录（可选；留空 = ${s.organize.targetMode === "custom" ? "设置的媒体库目录" : "就地整理"}）</label>
+      <div class="olm-row">
+        <input class="olm-input mono" id="olm-target" value="${escHtml(st.targetDir || "")}" placeholder="本次整理的输出目录，如 /网盘/媒体库/剧集" />
+        <button class="olm-btn" data-act="pickTargetDir" style="flex:none">浏览…</button>
+      </div>
+      <div class="olm-hint">电影/剧集的规范目录会建到这里（垃圾回收站仍在扫描目录内）。整理单个剧集文件夹时，选它的上级目录即可避免套娃。</div>
+    </div>
     <div class="olm-row" style="flex-wrap:wrap;gap:16px;margin-top:4px">
       <label class="olm-switch"><input type="checkbox" data-chg="quickRecursive" ${s.organize.recursive ? "checked" : ""}/> 递归子目录（深度 ${s.organize.maxDepth}）</label>
       <label class="olm-switch"><input type="checkbox" data-chg="quickRefresh" ${st.refresh ? "checked" : ""}/> 强制刷新目录缓存</label>
-      <span class="olm-hint" style="margin:0">垃圾文件：${s.organize.junkAction === "trash" ? "移入回收站" : "忽略"}　|　${modeDesc}</span>
+      <span class="olm-hint" style="margin:0">垃圾文件：${junkDesc}　|　${modeDesc}</span>
     </div>
     <div style="margin-top:16px">
       <button class="olm-btn pri" data-act="startOrganize">🔍 扫描并生成整理方案</button>
@@ -173,7 +183,7 @@ function olmItemRow(task, it) {
   var src = olmRelToRoot(task.root, it.file.dir, it.file.name);
   var dst = it.dstDir && it.dstName ? olmRelToRoot(task.root, it.dstDir, it.dstName) : "";
   var canCheck = it.status === "ok" || it.status === "conflict" ||
-    (it.status === "excluded" && !!(it.dstDir && it.dstName));
+    (it.status === "excluded" && (!!(it.dstDir && it.dstName) || it.action === "delete"));
   var right;
   if (dst && it.status !== "same") {
     right = `<div class="path new">${escHtml(dst)}</div>` +
@@ -253,7 +263,8 @@ function olmRenderPlan(st) {
   ${banners}
   <div class="olm-row" style="margin-bottom:14px;flex-wrap:wrap">
     <span class="olm-chip blue">共 ${stats.total} 项</span>
-    <span class="olm-chip green">将执行 ${stats.included}（移动 ${stats.move} / 改名 ${stats.rename}${stats.trash ? " / 回收 " + stats.trash : ""}）</span>
+    <span class="olm-chip green">将执行 ${stats.included}（移动 ${stats.move} / 改名 ${stats.rename}${stats.trash ? " / 回收 " + stats.trash : ""}${stats.del ? " / 删除 " + stats.del : ""}）</span>
+    ${stats.del ? `<span class="olm-chip red">⚠ 删除 ${stats.del} 项不可恢复</span>` : ""}
     ${stats.same ? `<span class="olm-chip gray">已规范 ${stats.same}</span>` : ""}
     ${stats.conflict ? `<span class="olm-chip red">冲突 ${stats.conflict}</span>` : ""}
     ${stats.excluded ? `<span class="olm-chip gray">跳过 ${stats.excluded}</span>` : ""}
@@ -261,7 +272,7 @@ function olmRenderPlan(st) {
     <button class="olm-btn" data-act="backToIdle">← 返回</button>
     <button class="olm-btn pri" data-act="executePlan" ${stats.included ? "" : "disabled"}>🚀 执行 ${stats.included} 项</button>
   </div>
-  <div class="olm-hint" style="margin:-6px 0 12px">目录：<span style="color:#94a3b8">${escHtml(task.root)}</span>　勾选=执行；✎ 可手动改目标路径；冲突项需修改或放弃其一。</div>
+  <div class="olm-hint" style="margin:-6px 0 12px">目录：<span style="color:#94a3b8">${escHtml(task.root)}</span>${task.targetDir ? `　整理到：<span style="color:#34d399">${escHtml(task.targetDir)}</span>` : ""}　勾选=执行；✎ 可手动改目标路径；冲突项需修改或放弃其一。</div>
   ${groupsHtml || `<div class="olm-empty">没有识别到电影/剧集</div>`}
   ${otherHtml}`;
 }
@@ -326,11 +337,22 @@ olmUI.actions.quickRefresh = function (el) {
   olmUI.state.organize.refresh = !!el.checked;
 };
 
+// 把表单输入同步进状态（打开目录选择器/开始整理前调用，避免重绘丢输入）
+function olmSyncOrganizeInputs() {
+  var st = olmUI.state.organize;
+  var p = olmEl("#olm-path");
+  if (p && p.value.trim()) st.path = p.value.trim();
+  var t = olmEl("#olm-target");
+  if (t) st.targetDir = t.value.trim();
+}
+
 olmUI.actions.startOrganize = function () {
   var st = olmUI.state.organize;
-  var input = olmEl("#olm-path");
-  var path = (input ? input.value : st.path || "/").trim().replace(/\/+$/, "") || "/";
+  olmSyncOrganizeInputs();
+  var path = (st.path || "/").replace(/\/+$/, "") || "/";
   if (path[0] !== "/") { olmToast("路径需以 / 开头", "err"); return; }
+  var target = (st.targetDir || "").replace(/\/+$/, "");
+  if (target && target[0] !== "/") { olmToast("整理目标目录需以 / 开头", "err"); return; }
   st.path = path;
   st.error = null;
   st.cancelFlag = { cancelled: false };
@@ -340,7 +362,7 @@ olmUI.actions.startOrganize = function () {
   st._executor = clients.executor;
   st.step = "running";
   olmRenderTab();
-  clients.pipeline.organize(path, { refresh: st.refresh })
+  clients.pipeline.organize(path, { refresh: st.refresh, targetDir: target })
     .then(function (task) {
       st.task = task;
       st.step = "plan";
@@ -399,6 +421,7 @@ olmUI.actions.toggleItem = function (el) {
   it.include = el.checked;
   if (!el.checked) { it.status = it.status === "conflict" ? "conflict" : "excluded"; if (it.status === "excluded") it.reason = "手动排除"; }
   else if (it.dstDir && it.dstName) { it.status = "ok"; it.reason = ""; }
+  else if (it.action === "delete") { it.status = "ok"; it.reason = "垃圾文件 → 删除（不可恢复）"; }
   olmRefreshPlanAndRender();
 };
 
@@ -411,9 +434,10 @@ olmUI.actions.toggleGroup = function (el) {
     if (it.groupId !== gid) return;
     if (it.status === "same" || it.status === "done" || it.status === "failed") return;
     it.userExcluded = !on;
-    it.include = on && !!(it.dstDir && it.dstName);
+    it.include = on && (!!(it.dstDir && it.dstName) || it.action === "delete");
     if (!on) { it.status = "excluded"; it.reason = "手动排除"; }
     else if (it.dstDir && it.dstName) { it.status = "ok"; it.reason = ""; }
+    else if (it.action === "delete") { it.status = "ok"; it.reason = "垃圾文件 → 删除（不可恢复）"; }
   });
   olmRefreshPlanAndRender();
 };
@@ -567,10 +591,12 @@ olmUI.actions.executePlan = function () {
   var s = olmGetSettings();
   olmConfirm({
     title: "确认执行整理",
-    html: `将执行 <b style="color:#34d399">${stats.included}</b> 项操作（移动 ${stats.move} / 改名 ${stats.rename}${stats.trash ? " / 回收 " + stats.trash : ""}）。<br/>` +
+    html: `将执行 <b style="color:#34d399">${stats.included}</b> 项操作（移动 ${stats.move} / 改名 ${stats.rename}${stats.trash ? " / 回收 " + stats.trash : ""}${stats.del ? " / 删除 " + stats.del : ""}）。<br/>` +
+      (stats.del ? `<b style="color:#f87171">⚠ 其中 ${stats.del} 个垃圾文件将被永久删除，删除无法撤销！</b><br/>` : "") +
       `操作间隔 ${s.exec.intervalMs}ms（网盘限流保护，可在设置调整）。<br/>` +
-      `所有操作会记录日志，完成后可整体撤销。确定执行？`,
-    okText: "开始执行"
+      `所有操作会记录日志，完成后可整体撤销${stats.del ? "（删除除外）" : ""}。确定执行？`,
+    okText: "开始执行",
+    danger: !!stats.del
   }).then(function (ok) {
     if (!ok) return;
     st.cancelFlag = { cancelled: false };
@@ -616,9 +642,12 @@ olmUI.actions.undoResult = function () {
 
 // 供整理页/记录页共用
 function olmUndoRecord(rec, done) {
+  var delOps = (rec.ops || []).filter(function (o) { return o.t === "remove"; }).length;
   olmConfirm({
     title: "撤销整理",
-    html: `将按操作日志逆序回放 <b>${(rec.ops || []).length}</b> 步（移动的移回、改名的改回；创建的目录保留）。确定撤销？`,
+    html: `将按操作日志逆序回放 <b>${(rec.ops || []).length}</b> 步（移动的移回、改名的改回；创建的目录保留）。` +
+      (delOps ? `<br/><b style="color:#f87171">已删除的 ${delOps} 个文件无法恢复，将跳过。</b>` : "") +
+      `确定撤销？`,
     okText: "撤销",
     danger: true
   }).then(function (ok) {
@@ -629,7 +658,8 @@ function olmUndoRecord(rec, done) {
     clients.executor.undo(rec)
       .then(function (r) {
         updateTaskRecord(rec);
-        olmToast("撤销完成：成功 " + r.done + (r.failed ? "，失败 " + r.failed : ""), r.failed ? "err" : "ok", 4000);
+        olmToast("撤销完成：成功 " + r.done + (r.failed ? "，失败 " + r.failed : "") +
+          (r.skippedDeletes ? "（删除的 " + r.skippedDeletes + " 项无法恢复）" : ""), r.failed ? "err" : "ok", 4000);
         if (done) done(r);
       })
       .catch(function (e) {
@@ -640,12 +670,9 @@ function olmUndoRecord(rec, done) {
   });
 }
 
-/* 目录选择器 */
-olmUI.actions.pickDir = function () {
-  var st = olmUI.state.organize;
-  var input = olmEl("#olm-path");
-  var start = (input && input.value.trim()) || st.path || "/";
-  var cur = start;
+/* 目录选择器（通用）：onChoose(dir) 收到选定目录 */
+function olmPickDirModal(start, onChoose) {
+  var cur = start || "/";
   var ol = createOpenListClient({});
   var close = olmModal(`
     <h3>选择目录</h3>
@@ -683,9 +710,26 @@ olmUI.actions.pickDir = function () {
   mask.querySelector("[data-olm-up]").addEventListener("click", function () { load(pathDir(cur)); });
   mask.querySelector("[data-olm-cancel]").addEventListener("click", close);
   mask.querySelector("[data-olm-choose]").addEventListener("click", function () {
-    st.path = cur;
     close();
-    olmRenderTab();
+    onChoose(cur);
   });
   load(cur);
+}
+
+olmUI.actions.pickDir = function () {
+  var st = olmUI.state.organize;
+  olmSyncOrganizeInputs();
+  olmPickDirModal(st.path || "/", function (dir) {
+    st.path = dir;
+    olmRenderTab();
+  });
+};
+
+olmUI.actions.pickTargetDir = function () {
+  var st = olmUI.state.organize;
+  olmSyncOrganizeInputs();
+  olmPickDirModal(st.targetDir || pathDir(st.path || "/"), function (dir) {
+    st.targetDir = dir;
+    olmRenderTab();
+  });
 };

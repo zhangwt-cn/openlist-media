@@ -208,7 +208,7 @@ function olmRenderSettings() {
         ${olmField(d, "疑似样片阈值 (MB)", "organize.minVideoMB", { type: "num", hint: "小于此体积且无季集信息的视频归入「花絮/样片」" })}
       </div>
       <div>
-        ${olmField(d, "垃圾文件处理", "organize.junkAction", { type: "select", options: [["ignore", "忽略（不动它们）"], ["trash", "移入回收站目录"]] })}
+        ${olmField(d, "垃圾文件处理", "organize.junkAction", { type: "select", options: [["ignore", "忽略（不动它们）"], ["trash", "移入回收站目录"], ["delete", "直接删除（执行前确认，不可恢复）"]], hint: "「直接删除」会在方案中标红并在执行确认框中二次提示" })}
         ${olmField(d, "回收站目录名", "organize.trashDirName", { mono: true })}
         ${olmField(d, "执行完成后清理空目录", "organize.cleanEmptyDirs", { type: "bool", hint: "调用 OpenList 的 remove_empty_directory 清理扫描目录下的空目录" })}
       </div>

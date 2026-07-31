@@ -129,6 +129,11 @@ function createOpenListClient(opts) {
       });
     },
 
+    // 删除文件（仅垃圾文件「直接删除」模式使用，不可恢复）
+    remove: function (dir, names) {
+      return req("/api/fs/remove", { dir: dir, names: names });
+    },
+
     removeEmptyDirectory: function (srcDir) {
       return req("/api/fs/remove_empty_directory", { src_dir: srcDir });
     }

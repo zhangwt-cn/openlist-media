@@ -367,6 +367,15 @@ function makeFakeOl(init) {
       }
       return null;
     },
+    remove: async function (dir, names) {
+      calls.push(["remove", dir, names.slice()]);
+      var i;
+      for (i = 0; i < names.length; i++) {
+        if (!tree[dir] || !tree[dir][names[i]]) throw fail("remove: not found " + names[i]);
+      }
+      for (i = 0; i < names.length; i++) delete tree[dir][names[i]];
+      return null;
+    },
     removeEmptyDirectory: async function () { calls.push(["rmempty"]); return null; }
   };
 }
@@ -595,6 +604,51 @@ async function testTrashMode() {
   ok(fake.has("/dl/Movie (2020)/Movie (2020) - 1080p.mkv"), "电影正常整理");
 }
 
+/* ---------- 指定目标目录 + 垃圾直接删除 ---------- */
+async function testTargetDirAndDelete() {
+  section("target dir & delete");
+  var ROOT = "/dl2";
+  var showDir = ROOT + "/凡人修仙传 第一季 (2020) 全12集";
+  var fake = makeFakeOl((function () {
+    var m = {};
+    m[showDir + "/01.mp4"] = 900 * 1048576;
+    m[showDir + "/最新电影 www.ad-site.com.txt"] = 1024;
+    return m;
+  })());
+  var S = testSettings();
+  S.organize.junkAction = "delete";
+  var pipe = O.createPipeline({ ol: fake, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task = await pipe.organize(ROOT, { targetDir: "/lib/tv" });
+  var vid = null, junk = null;
+  task.items.forEach(function (it) {
+    if (it.file.ext === "mp4") vid = it;
+    if (it.file.ext === "txt") junk = it;
+  });
+  eq(vid.dstDir, "/lib/tv/凡人修仙传 (2020)/Season 01", "目标目录重定向到 targetDir");
+  eq(vid.dstName, "凡人修仙传 - S01E01.mp4", "目标文件名");
+  eq(junk.action, "delete", "垃圾文件标记删除");
+  ok(junk.include, "删除项默认勾选");
+  eq(junk.status, "ok", "删除项状态 ok");
+  eq(task.stats.del, 1, "stats.del 统计");
+  eq(task.targetDir, "/lib/tv", "task 记录 targetDir");
+
+  var exec = O.createExecutor({ ol: fake, getSettings: function () { return S; }, sleepFn: function () { return Promise.resolve(); } });
+  await exec.execute(task);
+  eq(task.status, "done", "执行完成; " + task.log.join(" | "));
+  ok(fake.has("/lib/tv/凡人修仙传 (2020)/Season 01/凡人修仙传 - S01E01.mp4"), "视频进入目标库");
+  ok(!fake.has(showDir + "/01.mp4"), "原视频已移走");
+  ok(!fake.has(showDir + "/最新电影 www.ad-site.com.txt"), "垃圾文件已删除");
+  ok(task.ops.some(function (op) { return op.t === "remove"; }), "记录 remove 操作");
+
+  var rec = O.taskToRecord(task);
+  var r = await exec.undo(rec);
+  eq(r.failed, 0, "撤销无失败: " + (r.errors || []).join(";"));
+  eq(r.skippedDeletes, 1, "删除项跳过计数");
+  ok(fake.has(showDir + "/01.mp4"), "视频撤回原位");
+  ok(!fake.has(showDir + "/最新电影 www.ad-site.com.txt"), "删除的文件不会复活");
+  eq(rec.status, "undone", "撤销状态");
+}
+
 /* ---------- run ---------- */
 async function main() {
   testUtils();
@@ -607,6 +661,7 @@ async function main() {
   await testExecutor();
   await testExecutorSwap();
   await testTrashMode();
+  await testTargetDirAndDelete();
   print("ALL TESTS PASSED (" + __n + " assertions)");
 }
 

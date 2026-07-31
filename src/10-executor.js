@@ -92,7 +92,8 @@ function createExecutor(deps) {
   async function execute(task) {
     var s = getSettings();
     var items = task.items.filter(function (it) {
-      return it.include && it.status === "ok" && it.dstDir && it.dstName;
+      return it.include && it.status === "ok" &&
+        ((it.dstDir && it.dstName) || it.action === "delete");
     });
     if (!items.length) throw new Error("没有可执行的条目");
     task.status = "executing";
@@ -113,7 +114,7 @@ function createExecutor(deps) {
     var needDirs = {};
     for (i = 0; i < items.length; i++) {
       it = items[i];
-      if (it.dstDir !== it.file.dir && !known[it.dstDir]) needDirs[it.dstDir] = true;
+      if (it.dstDir && it.dstDir !== it.file.dir && !known[it.dstDir]) needDirs[it.dstDir] = true;
     }
     var dirList = Object.keys(needDirs).sort(function (a, b) { return a.length - b.length; });
     var totalSteps = dirList.length + items.length;
@@ -146,7 +147,7 @@ function createExecutor(deps) {
     var renamesByDir = {};
     for (i = 0; i < items.length; i++) {
       it = items[i];
-      if (st[it.id].failed) continue;
+      if (st[it.id].failed || it.action === "delete") continue;
       var finalName = it.dstName;
       if (it.action === "trash") {
         // 回收站重名 → 加时间戳后缀
@@ -342,6 +343,29 @@ function createExecutor(deps) {
       }
     }
 
+    /* D. 删除垃圾文件（junkAction=delete；不可撤销，放最后执行） */
+    for (i = 0; i < items.length; i++) {
+      it = items[i];
+      var sd = st[it.id];
+      if (it.action !== "delete" || sd.failed || sd.done) continue;
+      var delDir = it.file.dir, delName = it.file.name;
+      try {
+        await writeOp(function () { return ol.remove(delDir, [delName]); }, "remove " + delName);
+        task.ops.push({ t: "remove", dir: delDir, name: delName });
+        sd.done = true;
+        it.status = "done";
+        taskLog(task, "删除 " + delName);
+      } catch (e) {
+        if (e instanceof OlmAuthError || (e && e.cancelled)) { finish(task, e); throw e; }
+        sd.failed = true;
+        it.status = "failed";
+        it.reason = "删除失败: " + ((e && e.message) || e);
+        taskLog(task, "删除失败 " + delName + ": " + ((e && e.message) || e));
+      }
+      doneSteps++;
+      onProgress({ phase: "exec", done: Math.min(doneSteps, totalSteps), total: totalSteps, note: "删除垃圾文件" });
+    }
+
     /* 收尾 */
     finish(task, null);
 
@@ -418,7 +442,7 @@ function createExecutor(deps) {
   async function undo(rec) {
     opSeq = 0;
     var ops = (rec.ops || []).slice().reverse();
-    var done = 0, failed = 0, errors = [];
+    var done = 0, failed = 0, skippedDeletes = 0, errors = [];
     for (var i = 0; i < ops.length; i++) {
       if (isCancelled()) break;
       var op = ops[i];
@@ -429,6 +453,8 @@ function createExecutor(deps) {
         } else if (op.t === "rename") {
           await writeOp(function () { return ol.rename(pathJoin(op.dir, op.to), op.from); }, "undo rename");
           done++;
+        } else if (op.t === "remove") {
+          skippedDeletes++;   // 删除不可恢复，跳过
         }
         // mkdir 不回滚（留空目录无害，可用清理空目录功能处理）
       } catch (e) {
@@ -440,7 +466,7 @@ function createExecutor(deps) {
     }
     rec.status = failed ? "undo_partial" : "undone";
     rec.undoneAt = olmNowIso();
-    return { done: done, failed: failed, errors: errors };
+    return { done: done, failed: failed, errors: errors, skippedDeletes: skippedDeletes };
   }
 
   return { execute: execute, undo: undo };

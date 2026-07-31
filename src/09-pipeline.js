@@ -1,7 +1,7 @@
 /* ==== 整理流水线：扫描 → 解析 → 分组 → TMDB 匹配 → 生成方案 ==== */
 
 function olmComputeStats(items) {
-  var st = { total: items.length, included: 0, move: 0, rename: 0, trash: 0, same: 0, conflict: 0, excluded: 0, done: 0, failed: 0 };
+  var st = { total: items.length, included: 0, move: 0, rename: 0, trash: 0, del: 0, same: 0, conflict: 0, excluded: 0, done: 0, failed: 0 };
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
     if (it.include) {
@@ -9,6 +9,7 @@ function olmComputeStats(items) {
       if (it.action === "move") st.move++;
       else if (it.action === "rename") st.rename++;
       else if (it.action === "trash") st.trash++;
+      else if (it.action === "delete") st.del++;
     }
     if (it.status === "same") st.same++;
     if (it.status === "conflict") st.conflict++;
@@ -85,11 +86,15 @@ function createPipeline(deps) {
     return { root: root, files: files, dirs: dirs, truncated: truncated };
   }
 
-  /* ---- 目标根目录 ---- */
-  function resolveRoots(root) {
+  /* ---- 目标根目录 ----
+   * targetDir: 本次整理的目标目录覆盖（UI 手选，优先级最高）；回收站仍在扫描目录内 */
+  function resolveRoots(root, targetDir) {
     var org = getSettings().organize;
     var movieRoot = root, tvRoot = root;
-    if (org.targetMode === "custom") {
+    var t = targetDir == null ? "" : String(targetDir).trim().replace(/\/+$/, "");
+    if (t) {
+      movieRoot = tvRoot = t;
+    } else if (org.targetMode === "custom") {
       if (org.movieDir && org.movieDir.trim()) movieRoot = org.movieDir.trim().replace(/\/+$/, "");
       if (org.tvDir && org.tvDir.trim()) tvRoot = org.tvDir.trim().replace(/\/+$/, "");
     }
@@ -302,7 +307,7 @@ function createPipeline(deps) {
   /* ---- 生成目标与冲突检测 ---- */
   function buildTargetsFor(task, groupsById) {
     var s = getSettings();
-    var roots = resolveRoots(task.root);
+    var roots = resolveRoots(task.root, task.targetDir);
     var junkAction = s.organize.junkAction;
 
     // 先给视频定目标
@@ -323,6 +328,11 @@ function createPipeline(deps) {
           it.include = !it.userExcluded;
           it.status = it.userExcluded ? "excluded" : "ok";
           it.reason = it.userExcluded ? "手动排除" : "垃圾文件 → 回收站";
+        } else if (junkAction === "delete") {
+          it.action = "delete";
+          it.include = !it.userExcluded;
+          it.status = it.userExcluded ? "excluded" : "ok";
+          it.reason = it.userExcluded ? "手动排除" : "垃圾文件 → 删除（不可恢复）";
         } else {
           it.status = "excluded";
           it.reason = "垃圾文件（忽略）";
@@ -388,7 +398,7 @@ function createPipeline(deps) {
     // 动作与 same 判定
     for (i = 0; i < task.items.length; i++) {
       it = task.items[i];
-      if (it.status === "excluded" || it.action === "trash") continue;
+      if (it.status === "excluded" || it.action === "trash" || it.action === "delete") continue;
       if (!it.dstDir || !it.dstName) continue;
       if (it.dstDir === it.file.dir && it.dstName === it.file.name) {
         it.action = "none";
@@ -489,6 +499,7 @@ function createPipeline(deps) {
       id: olmUid("task"),
       createdAt: olmNowIso(),
       root: root,
+      targetDir: (o.targetDir == null ? "" : String(o.targetDir).trim().replace(/\/+$/, "")) || null,
       status: "ready",
       groups: gb.groups,
       items: gb.items,
