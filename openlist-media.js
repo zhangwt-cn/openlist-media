@@ -1,4 +1,4 @@
-/*! openlist-media v0.1.0 | OpenList 影视智能整理（纯前端脚本）| 安装: OpenList 管理后台→设置→全局→自定义头部/自定义内容 */
+/*! openlist-media v0.1.1 | OpenList 影视智能整理（纯前端脚本）| 安装: OpenList 管理后台→设置→全局→自定义头部/自定义内容 */
 (function () {
 "use strict";
 
@@ -23,12 +23,13 @@
  *                  stats, items, ops: [{t:mkdir|rename|move, ...}], log: [] }
  */
 
-var OLM_VERSION = "0.1.0";
+var OLM_VERSION = "0.1.1";
 
 var OLM_KEYS = {
   settings: "olm.settings",
   tasks: "olm.tasks",
-  tmdbCache: "olm.tmdb.cache"
+  tmdbCache: "olm.tmdb.cache",
+  fabPos: "olm.fabpos"
 };
 
 var VIDEO_EXTS = {
@@ -1118,6 +1119,25 @@ function mergeParsed(ai, local) {
 }
 
 /*
+ * 由 base_url 计算 chat/completions 端点，兼容各家填法：
+ *   - 以 # 结尾：去掉 # 后原样使用（特殊网关的完整地址）
+ *   - 已以 /chat/completions 结尾：原样使用
+ *   - 路径中已含版本段（/v1、/v4、/v1beta…）：只补 /chat/completions
+ *   - 其余（如只填 https://api.openai.com 或 one-api 根地址）：补 /v1/chat/completions
+ */
+function olmAiEndpoint(baseUrl) {
+  var u = String(baseUrl == null ? "" : baseUrl).trim();
+  if (!u) return "";
+  if (u.charAt(u.length - 1) === "#") return u.slice(0, -1).trim();
+  if (u.indexOf("://") === -1) u = "https://" + u;
+  u = u.replace(/\/+$/, "");
+  if (/\/chat\/completions$/i.test(u)) return u;
+  var path = u.replace(/^[a-z][a-z0-9+.\-]*:\/\/[^\/]*/i, "");
+  if (/\/v\d+[a-z0-9]*(\/|$)/i.test(path)) return u + "/chat/completions";
+  return u + "/v1/chat/completions";
+}
+
+/*
  * getCfg: () => settings.ai
  */
 function createAiClient(getCfg, deps) {
@@ -1127,20 +1147,20 @@ function createAiClient(getCfg, deps) {
       ? fetch.bind(typeof window !== "undefined" ? window : globalThis)
       : null);
   var sleepFn = deps.sleepFn || olmSleep;
+  // 探测到网关不支持的参数后记下来，本客户端后续请求不再携带（省一次重试）
+  var compat = { noJsonMode: false, noTemperature: false };
 
   async function chat(messages, o) {
     o = o || {};
     var cfg = getCfg();
     if (!fetchFn) throw new Error("当前环境没有 fetch");
     if (!cfg.apiKey) throw new Error("未配置 AI API Key");
-    var url = String(cfg.baseUrl || "").replace(/\/+$/, "") + "/chat/completions";
-    var body = {
-      model: cfg.model,
-      messages: messages,
-      temperature: cfg.temperature == null ? 0.1 : cfg.temperature,
-      stream: false
-    };
-    var useJson = o.jsonMode !== undefined ? o.jsonMode : cfg.jsonMode;
+    var url = olmAiEndpoint(cfg.baseUrl);
+    if (!url) throw new Error("未配置 AI 接口地址 (base_url)");
+    var body = { model: cfg.model, messages: messages, stream: false };
+    var useTemp = !compat.noTemperature;
+    if (useTemp) body.temperature = cfg.temperature == null ? 0.1 : cfg.temperature;
+    var useJson = (o.jsonMode !== undefined ? o.jsonMode : cfg.jsonMode) && !compat.noJsonMode;
     if (useJson) body.response_format = { type: "json_object" };
 
     var ctl = (typeof AbortController !== "undefined") ? new AbortController() : null;
@@ -1163,9 +1183,17 @@ function createAiClient(getCfg, deps) {
       if (timer) clearTimeout(timer);
     }
     if (!resp.ok) {
-      // 部分网关不支持 response_format，去掉后重试一次
-      if (useJson && resp.status === 400 && /response_format|json_object/i.test(text || "")) {
-        return chat(messages, Object.assign({}, o, { jsonMode: false }));
+      if (resp.status === 400) {
+        // 部分网关不支持 response_format，去掉后重试
+        if (useJson && /response_format|json_object/i.test(text || "")) {
+          compat.noJsonMode = true;
+          return chat(messages, o);
+        }
+        // OpenAI gpt-5 / o 系列只接受默认温度，去掉 temperature 重试
+        if (useTemp && /temperature/i.test(text || "")) {
+          compat.noTemperature = true;
+          return chat(messages, o);
+        }
       }
       var msg = text || "";
       try { var j = JSON.parse(text); msg = (j.error && j.error.message) || j.message || text; } catch (e2) { /* keep */ }
@@ -2662,10 +2690,10 @@ var OLM_CSS = [
   "* { box-sizing: border-box; margin: 0; padding: 0; }",
   ".olm-root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; font-size: 14px; color: #e5e7eb; }",
   "",
-  "/* 悬浮按钮 */",
-  ".olm-fab { position: fixed; bottom: 96px; z-index: 2147483000; width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; background: linear-gradient(135deg, #059669, #0d9488); color: #fff; font-size: 22px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.35); transition: transform .15s ease; display: flex; align-items: center; justify-content: center; }",
+  "/* 悬浮按钮（可拖动；right 默认留出 OpenList 右侧工具栏的位置） */",
+  ".olm-fab { position: fixed; bottom: 96px; z-index: 2147483000; width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; background: linear-gradient(135deg, #059669, #0d9488); color: #fff; font-size: 22px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.35); transition: transform .15s ease; display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none; }",
   ".olm-fab:hover { transform: scale(1.08); }",
-  ".olm-fab.right { right: 20px; } .olm-fab.left { left: 20px; }",
+  ".olm-fab.right { right: 76px; } .olm-fab.left { left: 20px; }",
   "",
   "/* 遮罩与面板 */",
   ".olm-overlay { position: fixed; inset: 0; z-index: 2147483001; background: rgba(2,6,16,.62); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 2vh 1vw; }",
@@ -2899,6 +2927,76 @@ function olmClosePanel() {
   if (ov) ov.style.display = "none";
 }
 
+/* ---- 悬浮按钮：拖动摆放并记住位置 ----
+ * 位置存 OLM_KEYS.fabPos = { xp, yp }，为按钮左上角在可移动范围内的比例(0~1)，
+ * 换分辨率/窗口大小时按比例还原并夹在视口内。 */
+
+function olmApplyFabPos(fab) {
+  var pos = lsGetJSON(OLM_KEYS.fabPos, null);
+  if (!isPlainObj(pos) || pos.xp == null || pos.yp == null) return false;
+  var w = fab.offsetWidth || 48, h = fab.offsetHeight || 48;
+  var maxX = Math.max(0, window.innerWidth - w), maxY = Math.max(0, window.innerHeight - h);
+  fab.style.left = Math.round(Math.min(Math.max(pos.xp, 0), 1) * maxX) + "px";
+  fab.style.top = Math.round(Math.min(Math.max(pos.yp, 0), 1) * maxY) + "px";
+  fab.style.right = "auto";
+  fab.style.bottom = "auto";
+  return true;
+}
+
+function olmSaveFabPos(fab) {
+  var r = fab.getBoundingClientRect();
+  var maxX = Math.max(1, window.innerWidth - r.width), maxY = Math.max(1, window.innerHeight - r.height);
+  lsSetJSON(OLM_KEYS.fabPos, {
+    xp: Math.min(Math.max(r.left / maxX, 0), 1),
+    yp: Math.min(Math.max(r.top / maxY, 0), 1)
+  });
+}
+
+// 清除拖动位置并回到 side 对应的默认位置（设置页切换左右时调用）
+function olmResetFabPos(side) {
+  try { olmStorage.removeItem(OLM_KEYS.fabPos); } catch (e) { /* ignore */ }
+  var fab = olmEl(".olm-fab");
+  if (!fab) return;
+  fab.classList.toggle("left", side === "left");
+  fab.classList.toggle("right", side !== "left");
+  fab.style.left = fab.style.top = fab.style.right = fab.style.bottom = "";
+}
+
+function olmMakeFabDraggable(fab) {
+  var drag = null;
+  fab.addEventListener("pointerdown", function (e) {
+    if (e.button != null && e.button !== 0) return;
+    var r = fab.getBoundingClientRect();
+    drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, on: false };
+    if (fab.setPointerCapture) {
+      try { fab.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }
+  });
+  fab.addEventListener("pointermove", function (e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.on && dx * dx + dy * dy < 36) return; // 移动超过 6px 才算拖动，避免误吞点击
+    drag.on = true;
+    var w = fab.offsetWidth || 48, h = fab.offsetHeight || 48;
+    fab.style.left = Math.min(Math.max(drag.ox + dx, 4), window.innerWidth - w - 4) + "px";
+    fab.style.top = Math.min(Math.max(drag.oy + dy, 4), window.innerHeight - h - 4) + "px";
+    fab.style.right = "auto";
+    fab.style.bottom = "auto";
+  });
+  function done(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    var moved = drag.on;
+    drag = null;
+    if (!moved) return;
+    fab.__olmDragged = true; // 吃掉拖动结束触发的 click
+    setTimeout(function () { fab.__olmDragged = false; }, 120);
+    olmSaveFabPos(fab);
+  }
+  fab.addEventListener("pointerup", done);
+  fab.addEventListener("pointercancel", done);
+  window.addEventListener("resize", function () { olmApplyFabPos(fab); });
+}
+
 function olmMountUI() {
   if (olmUI.host) return;
   var host = document.createElement("div");
@@ -2930,7 +3028,9 @@ function olmMountUI() {
     "</div></div>";
   root.appendChild(wrap);
 
-  root.querySelector(".olm-fab").addEventListener("click", function () {
+  var fab = root.querySelector(".olm-fab");
+  fab.addEventListener("click", function () {
+    if (fab.__olmDragged) { fab.__olmDragged = false; return; }
     if (olmUI.open) olmClosePanel();
     else {
       // 每次打开时刷新默认路径为当前浏览目录
@@ -2940,6 +3040,8 @@ function olmMountUI() {
       olmOpenPanel();
     }
   });
+  olmApplyFabPos(fab);
+  olmMakeFabDraggable(fab);
   root.querySelector(".olm-close").addEventListener("click", olmClosePanel);
   root.querySelector(".olm-overlay").addEventListener("click", function (e) {
     if (e.target === root.querySelector(".olm-overlay")) {
@@ -3818,9 +3920,9 @@ function olmRenderSettings() {
     <h3>AI 解析（OpenAI 兼容接口）</h3>
     ${olmField(d, "启用 AI 解析", "ai.enabled", { type: "bool", hint: "关闭后使用内置规则解析（免费但识别率较低）" })}
     <div class="olm-grid2">
-      ${olmField(d, "接口地址 (base_url)", "ai.baseUrl", { mono: true, placeholder: "https://api.deepseek.com/v1", hint: "DeepSeek: https://api.deepseek.com/v1　通义: https://dashscope.aliyuncs.com/compatible-mode/v1　Kimi: https://api.moonshot.cn/v1" })}
+      ${olmField(d, "接口地址 (base_url)", "ai.baseUrl", { mono: true, placeholder: "https://api.deepseek.com/v1", hint: "OpenAI: https://api.openai.com/v1　DeepSeek: https://api.deepseek.com/v1　通义: https://dashscope.aliyuncs.com/compatible-mode/v1　Kimi: https://api.moonshot.cn/v1。只填域名会自动补 /v1，也可直接填完整 /chat/completions 地址" })}
       ${olmField(d, "API Key", "ai.apiKey", { password: true })}
-      ${olmField(d, "模型", "ai.model", { placeholder: "deepseek-chat" })}
+      ${olmField(d, "模型", "ai.model", { placeholder: "deepseek-chat / gpt-4o-mini" })}
       ${olmField(d, "每批文件数", "ai.batchSize", { type: "num", hint: "一次请求解析的文件数，25 左右较稳" })}
       ${olmField(d, "并发请求数", "ai.concurrency", { type: "num" })}
     </div>
@@ -3890,7 +3992,7 @@ function olmRenderSettings() {
       </div>
       <div>
         ${olmField(d, "使用批量重命名接口", "exec.useBatchRename", { type: "bool", hint: "减少请求次数；个别驱动不支持时可关闭" })}
-        ${olmField(d, "悬浮按钮位置", "ui.fabSide", { type: "select", options: [["right", "右下"], ["left", "左下"]], hint: "刷新页面后生效" })}
+        ${olmField(d, "悬浮按钮位置", "ui.fabSide", { type: "select", options: [["right", "右下"], ["left", "左下"]], hint: "按钮支持直接拖动摆放（自动记住位置）；此处切换会立即复位到默认位置" })}
       </div>
     </div>
   </div>
@@ -3917,6 +4019,8 @@ olmUI.actions.setField = function (el) {
   else if (type === "num") { v = parseFloat(el.value); if (isNaN(v)) v = 0; }
   else v = el.value;
   olmSetPath(st.draft, path, v);
+  // 切换悬浮按钮默认边：清除拖动位置并立即生效
+  if (path === "ui.fabSide") olmResetFabPos(v);
   // 联动可见性/预览的字段需要重绘
   if (path === "organize.targetMode" || path.indexOf("naming.") === 0) olmRenderTab();
 };
@@ -4035,6 +4139,7 @@ var OLM = {
   detectSubLang: detectSubLang,
   olmCanonRes: olmCanonRes,
   // AI
+  olmAiEndpoint: olmAiEndpoint,
   extractJSONBlock: extractJSONBlock,
   normalizeAiItem: normalizeAiItem,
   mergeParsed: mergeParsed,
