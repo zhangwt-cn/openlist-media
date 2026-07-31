@@ -21,7 +21,7 @@
 - ✅ **先预览后执行**：分组卡片（含海报）逐条展示 原路径 → 新路径，可勾选、可手改、冲突自动标红
 - 🐢 **网盘友好**：写操作限速（默认 400ms 间隔）、失败重试、批量重命名接口降低请求数
 - ↩️ **可撤销**：每次执行记录完整操作日志，一键逆序回放撤销；垃圾文件只移入回收站目录，**不调用删除接口**
-- 🧪 176 条断言的单元测试覆盖解析/命名/冲突/执行/撤销核心逻辑
+- 🧪 191 条断言的单元测试覆盖解析/命名/冲突/执行/撤销核心逻辑
 
 ## 安装
 
@@ -32,7 +32,7 @@
 在「自定义头部」加入一行，保存后刷新前台即可：
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@v0.1.1/openlist-media.js" defer></script>
+<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@v0.1.2/openlist-media.js" defer></script>
 ```
 
 - 大陆网络 `cdn.jsdelivr.net` 不稳时换镜像域名（路径不变）：`fastly.jsdelivr.net` / `gcore.jsdelivr.net`
@@ -142,4 +142,4 @@ demo/           OpenList 模拟服务器（python3 标准库）
 
 ---
 
-MIT License · 与 OpenListTeam 无隶属关系 · v0.1.1
+MIT License · 与 OpenListTeam 无隶属关系 · v0.1.2

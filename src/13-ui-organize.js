@@ -217,6 +217,8 @@ function olmRenderPlan(st) {
     var poster = g.tmdb ? olmPosterUrl(g.tmdb.posterPath, 92) : null;
     var inc = items.filter(function (x) { return x.include; }).length;
     var allOn = inc > 0 && items.every(function (x) { return x.include || (x.status !== "ok" && x.status !== "excluded"); });
+    var aiN = items.filter(function (x) { return x.parsed && x.parsed.from === "ai"; }).length;
+    var parseChip = aiN === items.length ? "AI 解析" : (aiN > 0 ? `AI 解析 ${aiN}/${items.length}` : "规则解析");
     return `<div class="olm-card">
       <div class="olm-ghead">
         ${poster ? `<img class="olm-poster" src="${poster}" loading="lazy" onerror="this.style.display='none'"/>` : ""}
@@ -224,6 +226,7 @@ function olmRenderPlan(st) {
           <div class="name">${escHtml(olmGroupDisplay(g))}</div>
           <div class="meta">${olmGroupChips(g)}
             <span class="olm-chip gray">${items.length} 个文件</span>
+            <span class="olm-chip gray" title="文件名解析来源">${parseChip}</span>
             <span style="flex:1"></span>
             <label class="olm-switch" style="font-size:12px"><input type="checkbox" data-chg="toggleGroup" data-gid="${g.id}" ${allOn ? "checked" : ""}/> 全选</label>
             <button class="olm-btn sm" data-act="rematchOpen" data-gid="${g.id}">🔎 重新匹配</button>

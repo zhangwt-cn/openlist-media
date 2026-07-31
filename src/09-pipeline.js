@@ -101,11 +101,16 @@ function createPipeline(deps) {
   }
 
   /* ---- 解析（本地 + AI 合并） ---- */
-  async function parseAll(files) {
+  async function parseAll(files, root) {
     var s = getSettings();
     var minVideoMB = s.organize.minVideoMB;
+    // 把扫描根的目录名也纳入解析上下文：用户常直接选中剧集文件夹整理，
+    // 此时 relPath 只剩 "01.mp4"，剧名/季/年份全在根目录名里
+    var segs = String(root || "").split("/").filter(Boolean);
+    var ctx = segs.slice(-2).join("/");
+    function ctxPath(relPath) { return ctx ? ctx + "/" + relPath : relPath; }
     var parsedList = files.map(function (f) {
-      return localParseFile(f.relPath, { sizeMB: f.sizeMB, kind: f.kind, minVideoMB: minVideoMB });
+      return localParseFile(ctxPath(f.relPath), { sizeMB: f.sizeMB, kind: f.kind, minVideoMB: minVideoMB });
     });
     var aiErrors = [];
     if (s.ai.enabled && s.ai.apiKey && deps.ai) {
@@ -113,7 +118,7 @@ function createPipeline(deps) {
       var entries = [];
       for (var i = 0; i < files.length; i++) {
         if (files[i].kind === "video" || files[i].kind === "subtitle") {
-          entries.push({ i: i, path: files[i].relPath, sizeMB: files[i].sizeMB });
+          entries.push({ i: i, path: ctxPath(files[i].relPath), sizeMB: files[i].sizeMB });
         }
       }
       if (entries.length) {
@@ -334,7 +339,9 @@ function createPipeline(deps) {
       var built = olmBuildMediaName(g, p, s.naming);
       if (!built) {
         it.status = "excluded";
-        it.reason = p.type === "tv" ? "缺少集数信息" : "缺少标题信息";
+        var t0 = olmCleanTitle((g.tmdb && g.tmdb.title) || p.title || g.title);
+        it.reason = (!t0 || t0 === "_") ? "缺少标题信息（未识别出片名/剧名）"
+          : (p.type === "tv" ? "缺少集数信息" : "缺少标题信息");
         continue;
       }
       var base = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
@@ -473,7 +480,7 @@ function createPipeline(deps) {
       e.empty = true;
       throw e;
     }
-    var pr = await parseAll(scanRes.files);
+    var pr = await parseAll(scanRes.files, scanRes.root);
     var gb = buildGroups(scanRes.files, pr.parsedList);
     await matchGroups(gb.groups, gb.items);
     checkCancel();

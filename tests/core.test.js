@@ -108,6 +108,14 @@ function testLocalParse() {
   eq(p.season, 1, "老友记 season");
   eq(p.episode, 1, "老友记 纯数字文件名当集数");
 
+  p = O.localParseFile("TV/雪中悍刀行 第一季（2021）全38集 内嵌简英双语字幕 1080P/03.mp4", { sizeMB: 800 });
+  eq(p.type, "tv", "雪中 type");
+  eq(p.title, "雪中悍刀行", "雪中 title（跳过 TV 分类目录）");
+  eq(p.season, 1, "雪中 season");
+  eq(p.episode, 3, "雪中 纯数字文件名当集数");
+  eq(p.year, 2021, "雪中 year 全角括号");
+  eq(p.resolution, "1080p", "雪中 res");
+
   p = O.localParseFile("最新电影首发 www.dygod.org.txt", { sizeMB: 0.01 });
   eq(p.type, "junk", "广告 txt");
 
@@ -451,6 +459,40 @@ async function testPipeline() {
   });
   eq(organized.status, "same", "已规范识别");
   eq(messy.status, "conflict", "与已存在文件冲突");
+
+  // 扫描根本身就是剧集文件夹：根目录名提供剧名/季/年份上下文
+  var showRoot = "/media/downloads/凡人修仙传 第一季 (2020) 全12集 1080P";
+  var fake4 = makeFakeOl((function () {
+    var m = {};
+    m[showRoot + "/01.mp4"] = 900 * 1048576;
+    m[showRoot + "/02.mp4"] = 900 * 1048576;
+    return m;
+  })());
+  var pipe4 = O.createPipeline({ ol: fake4, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task4 = await pipe4.organize(showRoot, {});
+  var it01 = null;
+  task4.items.forEach(function (x) { if (x.file.name === "01.mp4") it01 = x; });
+  eq(it01.parsed.type, "tv", "根目录名提供剧集上下文");
+  eq(it01.parsed.title, "凡人修仙传", "剧名取自扫描根目录名");
+  eq(it01.parsed.season, 1, "季取自根目录名");
+  eq(it01.parsed.episode, 1, "纯数字文件名当集数");
+  eq(it01.parsed.year, 2020, "年份取自根目录名");
+  eq(it01.dstDir, showRoot + "/凡人修仙传 (2020)/Season 01", "目标目录");
+  eq(it01.dstName, "凡人修仙传 - S01E01.mp4", "目标文件名");
+
+  // AI 收到的 path 也带根目录上下文
+  var seenPaths = [];
+  var fakeAi = {
+    parseFiles: async function (entries) {
+      entries.forEach(function (e) { seenPaths.push(e.path); });
+      return { byI: {}, errors: [] };
+    }
+  };
+  var S2 = O.deepMerge(S, { ai: { enabled: true, apiKey: "x" } });
+  var pipe5 = O.createPipeline({ ol: fake4, ai: fakeAi, tmdb: null, getSettings: function () { return S2; } });
+  await pipe5.organize(showRoot, {});
+  ok(seenPaths.length === 2, "AI 收到 2 个文件");
+  ok(seenPaths[0].indexOf("凡人修仙传 第一季 (2020) 全12集 1080P/") !== -1, "AI path 含根目录名: " + seenPaths[0]);
 }
 
 /* ---------- 执行器 + 撤销 ---------- */

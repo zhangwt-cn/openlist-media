@@ -18,7 +18,7 @@
  *                  stats, items, ops: [{t:mkdir|rename|move, ...}], log: [] }
  */
 
-var OLM_VERSION = "0.1.1";
+var OLM_VERSION = "0.1.2";
 
 var OLM_KEYS = {
   settings: "olm.settings",
