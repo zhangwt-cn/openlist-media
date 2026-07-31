@@ -21,7 +21,7 @@
 - ✅ **先预览后执行**：分组卡片（含海报）逐条展示 原路径 → 新路径，可勾选、可手改、冲突自动标红
 - 🐢 **网盘友好**：写操作限速（默认 400ms 间隔）、失败重试、批量重命名接口降低请求数
 - ↩️ **可撤销**：每次执行记录完整操作日志，一键逆序回放撤销；垃圾文件只移入回收站目录，**不调用删除接口**
-- 🧪 155 条断言的单元测试覆盖解析/命名/冲突/执行/撤销核心逻辑
+- 🧪 176 条断言的单元测试覆盖解析/命名/冲突/执行/撤销核心逻辑
 
 ## 安装
 
@@ -32,7 +32,7 @@
 在「自定义头部」加入一行，保存后刷新前台即可：
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@v0.1.0/openlist-media.js" defer></script>
+<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@v0.1.1/openlist-media.js" defer></script>
 ```
 
 - 大陆网络 `cdn.jsdelivr.net` 不稳时换镜像域名（路径不变）：`fastly.jsdelivr.net` / `gcore.jsdelivr.net`
@@ -65,12 +65,12 @@ Fork 本仓库，改完代码 `git push` 即完成发布——内置 GitHub Acti
 也可以把构建出的 `openlist-media.js` 上传到 OpenList 挂载的目录，用 `/d/xxx/openlist-media.js` 直链在「自定义头部」引用
 （若开启「签名所有」，`/d/` 直链会因缺签名而加载失败，需将该目录设为公开且关闭签名）。
 
-安装后，**已登录用户**会在页面右下角看到 🎬 悬浮按钮（未登录访客看不到入口）。
+安装后，**已登录用户**会在页面右下角看到 🎬 悬浮按钮（未登录访客看不到入口）。按钮可**直接拖动**到任意位置并自动记住；设置里切换「左下/右下」可复位。
 
 ## 快速开始
 
 1. 点 🎬 打开面板 → **设置**：
-   - **AI 解析**：填 OpenAI 兼容接口。DeepSeek 示例：`base_url = https://api.deepseek.com/v1`，`model = deepseek-chat`，填入 API Key，点「测试 AI」
+   - **AI 解析**：填 OpenAI 兼容接口。DeepSeek 示例：`base_url = https://api.deepseek.com/v1`，`model = deepseek-chat`；OpenAI 官方：`base_url = https://api.openai.com/v1`（只填域名会自动补 `/v1`，填完整 `/chat/completions` 地址也行），`model = gpt-4o-mini` 等。填入 API Key，点「测试 AI」
    - **TMDB**：到 [themoviedb.org](https://www.themoviedb.org/settings/api) 免费申请 API Key（v3 key 或 v4 令牌都支持）。大陆网络直连不通时把「API 地址」换成你的反代/镜像。点「测试 TMDB」
    - 都不配也能用：走本地规则解析（识别率低一些，无集标题）
 2. 回到**整理**页：目录默认取当前 OpenList 浏览路径，也可「浏览…」选择 → **扫描并生成整理方案**
@@ -123,7 +123,9 @@ demo/           OpenList 模拟服务器（python3 标准库）
 ## FAQ
 
 - **看不到 🎬 按钮？** 只有已登录用户可见；确认已登录并刷新。仍不行则在设置里手动填 Token 覆盖（方式：先临时用方式 A 注入后进设置，或直接改 localStorage `olm.settings`）。
-- **AI 报跨域/CORS 错误？** 浏览器直连要求 AI 服务允许 CORS。DeepSeek 等主流服务支持；个别自建网关需开启 CORS 允许来源。
+- **🎬 按钮挡住了 OpenList 自带的侧栏图标？** 直接把按钮拖走即可，位置自动记住；设置 → 悬浮按钮位置 切换左右可复位。
+- **AI 报跨域/CORS 错误？** 浏览器直连要求 AI 服务允许 CORS。DeepSeek / OpenAI 等主流服务支持；个别自建网关需开启 CORS 允许来源。
+- **用 gpt-5 / o 系列模型报 temperature 参数错误？** 已自动处理：脚本检测到会去掉该参数重试并记住，无需手动设置。
 - **TMDB 连不上？** 大陆网络需反代/镜像，把「API 地址」「图片地址」换成镜像；或在能访问的网络环境使用。
 - **115/夸克执行到一半报限流？** 调大「写操作间隔」（如 800–1500ms），失败的条目会在结果里列出，可重新扫描再执行剩余部分。
 - **加密/密码目录？** 暂不支持带 meta 密码的目录（列目录会报错）。
@@ -140,4 +142,4 @@ demo/           OpenList 模拟服务器（python3 标准库）
 
 ---
 
-MIT License · 与 OpenListTeam 无隶属关系 · v0.1.0
+MIT License · 与 OpenListTeam 无隶属关系 · v0.1.1

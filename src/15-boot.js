@@ -21,6 +21,7 @@ var OLM = {
   detectSubLang: detectSubLang,
   olmCanonRes: olmCanonRes,
   // AI
+  olmAiEndpoint: olmAiEndpoint,
   extractJSONBlock: extractJSONBlock,
   normalizeAiItem: normalizeAiItem,
   mergeParsed: mergeParsed,

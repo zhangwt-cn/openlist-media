@@ -157,9 +157,9 @@ function olmRenderSettings() {
     <h3>AI 解析（OpenAI 兼容接口）</h3>
     ${olmField(d, "启用 AI 解析", "ai.enabled", { type: "bool", hint: "关闭后使用内置规则解析（免费但识别率较低）" })}
     <div class="olm-grid2">
-      ${olmField(d, "接口地址 (base_url)", "ai.baseUrl", { mono: true, placeholder: "https://api.deepseek.com/v1", hint: "DeepSeek: https://api.deepseek.com/v1　通义: https://dashscope.aliyuncs.com/compatible-mode/v1　Kimi: https://api.moonshot.cn/v1" })}
+      ${olmField(d, "接口地址 (base_url)", "ai.baseUrl", { mono: true, placeholder: "https://api.deepseek.com/v1", hint: "OpenAI: https://api.openai.com/v1　DeepSeek: https://api.deepseek.com/v1　通义: https://dashscope.aliyuncs.com/compatible-mode/v1　Kimi: https://api.moonshot.cn/v1。只填域名会自动补 /v1，也可直接填完整 /chat/completions 地址" })}
       ${olmField(d, "API Key", "ai.apiKey", { password: true })}
-      ${olmField(d, "模型", "ai.model", { placeholder: "deepseek-chat" })}
+      ${olmField(d, "模型", "ai.model", { placeholder: "deepseek-chat / gpt-4o-mini" })}
       ${olmField(d, "每批文件数", "ai.batchSize", { type: "num", hint: "一次请求解析的文件数，25 左右较稳" })}
       ${olmField(d, "并发请求数", "ai.concurrency", { type: "num" })}
     </div>
@@ -229,7 +229,7 @@ function olmRenderSettings() {
       </div>
       <div>
         ${olmField(d, "使用批量重命名接口", "exec.useBatchRename", { type: "bool", hint: "减少请求次数；个别驱动不支持时可关闭" })}
-        ${olmField(d, "悬浮按钮位置", "ui.fabSide", { type: "select", options: [["right", "右下"], ["left", "左下"]], hint: "刷新页面后生效" })}
+        ${olmField(d, "悬浮按钮位置", "ui.fabSide", { type: "select", options: [["right", "右下"], ["left", "左下"]], hint: "按钮支持直接拖动摆放（自动记住位置）；此处切换会立即复位到默认位置" })}
       </div>
     </div>
   </div>
@@ -256,6 +256,8 @@ olmUI.actions.setField = function (el) {
   else if (type === "num") { v = parseFloat(el.value); if (isNaN(v)) v = 0; }
   else v = el.value;
   olmSetPath(st.draft, path, v);
+  // 切换悬浮按钮默认边：清除拖动位置并立即生效
+  if (path === "ui.fabSide") olmResetFabPos(v);
   // 联动可见性/预览的字段需要重绘
   if (path === "organize.targetMode" || path.indexOf("naming.") === 0) olmRenderTab();
 };

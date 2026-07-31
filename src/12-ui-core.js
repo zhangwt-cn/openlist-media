@@ -5,10 +5,10 @@ var OLM_CSS = [
   "* { box-sizing: border-box; margin: 0; padding: 0; }",
   ".olm-root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; font-size: 14px; color: #e5e7eb; }",
   "",
-  "/* 悬浮按钮 */",
-  ".olm-fab { position: fixed; bottom: 96px; z-index: 2147483000; width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; background: linear-gradient(135deg, #059669, #0d9488); color: #fff; font-size: 22px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.35); transition: transform .15s ease; display: flex; align-items: center; justify-content: center; }",
+  "/* 悬浮按钮（可拖动；right 默认留出 OpenList 右侧工具栏的位置） */",
+  ".olm-fab { position: fixed; bottom: 96px; z-index: 2147483000; width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; background: linear-gradient(135deg, #059669, #0d9488); color: #fff; font-size: 22px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.35); transition: transform .15s ease; display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none; }",
   ".olm-fab:hover { transform: scale(1.08); }",
-  ".olm-fab.right { right: 20px; } .olm-fab.left { left: 20px; }",
+  ".olm-fab.right { right: 76px; } .olm-fab.left { left: 20px; }",
   "",
   "/* 遮罩与面板 */",
   ".olm-overlay { position: fixed; inset: 0; z-index: 2147483001; background: rgba(2,6,16,.62); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 2vh 1vw; }",
@@ -242,6 +242,76 @@ function olmClosePanel() {
   if (ov) ov.style.display = "none";
 }
 
+/* ---- 悬浮按钮：拖动摆放并记住位置 ----
+ * 位置存 OLM_KEYS.fabPos = { xp, yp }，为按钮左上角在可移动范围内的比例(0~1)，
+ * 换分辨率/窗口大小时按比例还原并夹在视口内。 */
+
+function olmApplyFabPos(fab) {
+  var pos = lsGetJSON(OLM_KEYS.fabPos, null);
+  if (!isPlainObj(pos) || pos.xp == null || pos.yp == null) return false;
+  var w = fab.offsetWidth || 48, h = fab.offsetHeight || 48;
+  var maxX = Math.max(0, window.innerWidth - w), maxY = Math.max(0, window.innerHeight - h);
+  fab.style.left = Math.round(Math.min(Math.max(pos.xp, 0), 1) * maxX) + "px";
+  fab.style.top = Math.round(Math.min(Math.max(pos.yp, 0), 1) * maxY) + "px";
+  fab.style.right = "auto";
+  fab.style.bottom = "auto";
+  return true;
+}
+
+function olmSaveFabPos(fab) {
+  var r = fab.getBoundingClientRect();
+  var maxX = Math.max(1, window.innerWidth - r.width), maxY = Math.max(1, window.innerHeight - r.height);
+  lsSetJSON(OLM_KEYS.fabPos, {
+    xp: Math.min(Math.max(r.left / maxX, 0), 1),
+    yp: Math.min(Math.max(r.top / maxY, 0), 1)
+  });
+}
+
+// 清除拖动位置并回到 side 对应的默认位置（设置页切换左右时调用）
+function olmResetFabPos(side) {
+  try { olmStorage.removeItem(OLM_KEYS.fabPos); } catch (e) { /* ignore */ }
+  var fab = olmEl(".olm-fab");
+  if (!fab) return;
+  fab.classList.toggle("left", side === "left");
+  fab.classList.toggle("right", side !== "left");
+  fab.style.left = fab.style.top = fab.style.right = fab.style.bottom = "";
+}
+
+function olmMakeFabDraggable(fab) {
+  var drag = null;
+  fab.addEventListener("pointerdown", function (e) {
+    if (e.button != null && e.button !== 0) return;
+    var r = fab.getBoundingClientRect();
+    drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, on: false };
+    if (fab.setPointerCapture) {
+      try { fab.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }
+  });
+  fab.addEventListener("pointermove", function (e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.on && dx * dx + dy * dy < 36) return; // 移动超过 6px 才算拖动，避免误吞点击
+    drag.on = true;
+    var w = fab.offsetWidth || 48, h = fab.offsetHeight || 48;
+    fab.style.left = Math.min(Math.max(drag.ox + dx, 4), window.innerWidth - w - 4) + "px";
+    fab.style.top = Math.min(Math.max(drag.oy + dy, 4), window.innerHeight - h - 4) + "px";
+    fab.style.right = "auto";
+    fab.style.bottom = "auto";
+  });
+  function done(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    var moved = drag.on;
+    drag = null;
+    if (!moved) return;
+    fab.__olmDragged = true; // 吃掉拖动结束触发的 click
+    setTimeout(function () { fab.__olmDragged = false; }, 120);
+    olmSaveFabPos(fab);
+  }
+  fab.addEventListener("pointerup", done);
+  fab.addEventListener("pointercancel", done);
+  window.addEventListener("resize", function () { olmApplyFabPos(fab); });
+}
+
 function olmMountUI() {
   if (olmUI.host) return;
   var host = document.createElement("div");
@@ -273,7 +343,9 @@ function olmMountUI() {
     "</div></div>";
   root.appendChild(wrap);
 
-  root.querySelector(".olm-fab").addEventListener("click", function () {
+  var fab = root.querySelector(".olm-fab");
+  fab.addEventListener("click", function () {
+    if (fab.__olmDragged) { fab.__olmDragged = false; return; }
     if (olmUI.open) olmClosePanel();
     else {
       // 每次打开时刷新默认路径为当前浏览目录
@@ -283,6 +355,8 @@ function olmMountUI() {
       olmOpenPanel();
     }
   });
+  olmApplyFabPos(fab);
+  olmMakeFabDraggable(fab);
   root.querySelector(".olm-close").addEventListener("click", olmClosePanel);
   root.querySelector(".olm-overlay").addEventListener("click", function (e) {
     if (e.target === root.querySelector(".olm-overlay")) {

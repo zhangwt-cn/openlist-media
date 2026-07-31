@@ -18,12 +18,13 @@
  *                  stats, items, ops: [{t:mkdir|rename|move, ...}], log: [] }
  */
 
-var OLM_VERSION = "0.1.0";
+var OLM_VERSION = "0.1.1";
 
 var OLM_KEYS = {
   settings: "olm.settings",
   tasks: "olm.tasks",
-  tmdbCache: "olm.tmdb.cache"
+  tmdbCache: "olm.tmdb.cache",
+  fabPos: "olm.fabpos"
 };
 
 var VIDEO_EXTS = {

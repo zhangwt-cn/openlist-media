@@ -104,6 +104,25 @@ function mergeParsed(ai, local) {
 }
 
 /*
+ * 由 base_url 计算 chat/completions 端点，兼容各家填法：
+ *   - 以 # 结尾：去掉 # 后原样使用（特殊网关的完整地址）
+ *   - 已以 /chat/completions 结尾：原样使用
+ *   - 路径中已含版本段（/v1、/v4、/v1beta…）：只补 /chat/completions
+ *   - 其余（如只填 https://api.openai.com 或 one-api 根地址）：补 /v1/chat/completions
+ */
+function olmAiEndpoint(baseUrl) {
+  var u = String(baseUrl == null ? "" : baseUrl).trim();
+  if (!u) return "";
+  if (u.charAt(u.length - 1) === "#") return u.slice(0, -1).trim();
+  if (u.indexOf("://") === -1) u = "https://" + u;
+  u = u.replace(/\/+$/, "");
+  if (/\/chat\/completions$/i.test(u)) return u;
+  var path = u.replace(/^[a-z][a-z0-9+.\-]*:\/\/[^\/]*/i, "");
+  if (/\/v\d+[a-z0-9]*(\/|$)/i.test(path)) return u + "/chat/completions";
+  return u + "/v1/chat/completions";
+}
+
+/*
  * getCfg: () => settings.ai
  */
 function createAiClient(getCfg, deps) {
@@ -113,20 +132,20 @@ function createAiClient(getCfg, deps) {
       ? fetch.bind(typeof window !== "undefined" ? window : globalThis)
       : null);
   var sleepFn = deps.sleepFn || olmSleep;
+  // 探测到网关不支持的参数后记下来，本客户端后续请求不再携带（省一次重试）
+  var compat = { noJsonMode: false, noTemperature: false };
 
   async function chat(messages, o) {
     o = o || {};
     var cfg = getCfg();
     if (!fetchFn) throw new Error("当前环境没有 fetch");
     if (!cfg.apiKey) throw new Error("未配置 AI API Key");
-    var url = String(cfg.baseUrl || "").replace(/\/+$/, "") + "/chat/completions";
-    var body = {
-      model: cfg.model,
-      messages: messages,
-      temperature: cfg.temperature == null ? 0.1 : cfg.temperature,
-      stream: false
-    };
-    var useJson = o.jsonMode !== undefined ? o.jsonMode : cfg.jsonMode;
+    var url = olmAiEndpoint(cfg.baseUrl);
+    if (!url) throw new Error("未配置 AI 接口地址 (base_url)");
+    var body = { model: cfg.model, messages: messages, stream: false };
+    var useTemp = !compat.noTemperature;
+    if (useTemp) body.temperature = cfg.temperature == null ? 0.1 : cfg.temperature;
+    var useJson = (o.jsonMode !== undefined ? o.jsonMode : cfg.jsonMode) && !compat.noJsonMode;
     if (useJson) body.response_format = { type: "json_object" };
 
     var ctl = (typeof AbortController !== "undefined") ? new AbortController() : null;
@@ -149,9 +168,17 @@ function createAiClient(getCfg, deps) {
       if (timer) clearTimeout(timer);
     }
     if (!resp.ok) {
-      // 部分网关不支持 response_format，去掉后重试一次
-      if (useJson && resp.status === 400 && /response_format|json_object/i.test(text || "")) {
-        return chat(messages, Object.assign({}, o, { jsonMode: false }));
+      if (resp.status === 400) {
+        // 部分网关不支持 response_format，去掉后重试
+        if (useJson && /response_format|json_object/i.test(text || "")) {
+          compat.noJsonMode = true;
+          return chat(messages, o);
+        }
+        // OpenAI gpt-5 / o 系列只接受默认温度，去掉 temperature 重试
+        if (useTemp && /temperature/i.test(text || "")) {
+          compat.noTemperature = true;
+          return chat(messages, o);
+        }
       }
       var msg = text || "";
       try { var j = JSON.parse(text); msg = (j.error && j.error.message) || j.message || text; } catch (e2) { /* keep */ }

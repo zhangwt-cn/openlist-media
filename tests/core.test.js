@@ -171,6 +171,61 @@ function testAiHelpers() {
   eq(merged2.season, 2);
 }
 
+/* ---------- AI 客户端（端点推导 + 参数兼容降级） ---------- */
+async function testAiClient() {
+  section("ai client");
+  var ep = O.olmAiEndpoint;
+  eq(ep("https://api.deepseek.com/v1"), "https://api.deepseek.com/v1/chat/completions", "标准 /v1");
+  eq(ep("https://api.openai.com"), "https://api.openai.com/v1/chat/completions", "裸域名自动补 /v1");
+  eq(ep("https://api.openai.com/v1/"), "https://api.openai.com/v1/chat/completions", "尾斜杠");
+  eq(ep("api.moonshot.cn/v1"), "https://api.moonshot.cn/v1/chat/completions", "无协议补 https");
+  eq(ep("https://dashscope.aliyuncs.com/compatible-mode/v1"), "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "版本段在路径末尾");
+  eq(ep("https://open.bigmodel.cn/api/paas/v4"), "https://open.bigmodel.cn/api/paas/v4/chat/completions", "v4");
+  eq(ep("https://gw.example.com/v1/acc/openai"), "https://gw.example.com/v1/acc/openai/chat/completions", "路径中已含 /v1/ 不重复补");
+  eq(ep("https://x.com/v1/chat/completions"), "https://x.com/v1/chat/completions", "完整端点原样");
+  eq(ep("https://x.com/custom/endpoint#"), "https://x.com/custom/endpoint", "# 强制原样");
+  eq(ep(""), "", "空返回空");
+
+  var calls = [];
+  var mode = "no-temp";
+  function resp(ok, status, bodyText) {
+    return { ok: ok, status: status, text: async function () { return bodyText; } };
+  }
+  var fakeFetch = async function (url, init) {
+    var body = JSON.parse(init.body);
+    calls.push({ url: url, body: body });
+    if (mode === "no-temp" && body.temperature != null) {
+      return resp(false, 400, '{"error":{"message":"Unsupported value: \'temperature\' does not support 0.1 with this model."}}');
+    }
+    if (mode === "no-json" && body.response_format) {
+      return resp(false, 400, '{"error":{"message":"response_format is not supported"}}');
+    }
+    return resp(true, 200, JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }));
+  };
+  var cfg = { enabled: true, baseUrl: "https://api.openai.com", apiKey: "sk-test", model: "gpt-5-mini", temperature: 0.1, jsonMode: true, timeoutMs: 5000, batchSize: 25, concurrency: 1 };
+  var noSleep = function () { return Promise.resolve(); };
+
+  // gpt-5/o 系列拒绝自定义 temperature → 去掉重试并记住
+  var ai = O.createAiClient(function () { return cfg; }, { fetchFn: fakeFetch, sleepFn: noSleep });
+  ok(await ai.test(), "temperature 被拒后自动重试成功");
+  eq(calls.length, 2, "重试一次");
+  eq(calls[0].url, "https://api.openai.com/v1/chat/completions", "URL 自动补 /v1");
+  ok(calls[0].body.temperature != null, "首次带 temperature");
+  ok(calls[1].body.temperature == null, "重试不带 temperature");
+  await ai.chat([{ role: "user", content: "hi" }]);
+  eq(calls.length, 3, "后续请求不再带 temperature（无重试）");
+  ok(calls[2].body.temperature == null, "记住兼容性");
+
+  // response_format 不支持 → 降级重试并记住
+  calls.length = 0;
+  mode = "no-json";
+  var ai2 = O.createAiClient(function () { return cfg; }, { fetchFn: fakeFetch, sleepFn: noSleep });
+  ok(await ai2.test(), "response_format 降级成功");
+  eq(calls.length, 2, "json 降级重试一次");
+  ok(!calls[1].body.response_format, "重试不带 response_format");
+  ok(calls[1].body.temperature != null, "temperature 不受影响");
+}
+
 /* ---------- 命名器 ---------- */
 function testNamer() {
   section("namer");
@@ -503,6 +558,7 @@ async function main() {
   testUtils();
   testLocalParse();
   testAiHelpers();
+  await testAiClient();
   testNamer();
   testOrderRenames();
   await testPipeline();
