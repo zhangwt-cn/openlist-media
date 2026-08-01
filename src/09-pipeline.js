@@ -355,7 +355,9 @@ function createPipeline(deps) {
         continue;
       }
       var base = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
-      it.dstDir = base + "/" + built.folderRel;
+      // 目标根本身就是这部影视的文件夹（直接整理剧集/电影文件夹）→ 不再嵌套「剧名 (年份)」层
+      var rel = olmDirIsMediaFolder(pathName(base), g) ? built.innerRel : built.folderRel;
+      it.dstDir = rel ? base + "/" + rel : base;
       it.dstName = it.file.ext ? built.fileBase + "." + it.file.ext : built.fileBase;
       if (it.file.kind === "video" && p.type === "tv") {
         var vk = "tv|" + titleKey((g.tmdb && g.tmdb.title) || g.title) + "|" + (p.season == null ? 1 : p.season) + "|" + p.episode + "|" + (p.part || "");
@@ -385,7 +387,8 @@ function createPipeline(deps) {
         var built2 = olmBuildMediaName(g, p, s.naming);
         if (built2) {
           var base2 = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
-          it.dstDir = base2 + "/" + built2.folderRel;
+          var rel2 = olmDirIsMediaFolder(pathName(base2), g) ? built2.innerRel : built2.folderRel;
+          it.dstDir = rel2 ? base2 + "/" + rel2 : base2;
           it.dstName = built2.fileBase + lang + "." + it.file.ext;
         } else {
           it.status = "excluded";

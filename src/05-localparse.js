@@ -275,7 +275,7 @@ function parseNameCore(rawName) {
   for (var i = 0; i < markers.length; i++) {
     if (markers[i] > 0 && markers[i] < cut) cut = markers[i];
   }
-  while (cut > 0 && /[\s\(\[【《\-–—_.]/.test(s[cut - 1])) cut--;
+  while (cut > 0 && /[\s\(\[（［【《〈「『\-–—_.]/.test(s[cut - 1])) cut--;
   var titleRaw = olmStripParsedTokens(s.slice(0, cut)).trim();
 
   // part 的中文形式（上/中/下），出现在标题区末尾

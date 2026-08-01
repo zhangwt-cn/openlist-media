@@ -12,8 +12,34 @@ function olmGroupDisplay(group) {
 }
 
 /*
+ * 判断目录名是否就是该组影视自己的文件夹（如 "百花杀（2026）"、"凡人修仙传 (2020) [tmdbid=x]"）：
+ * 去掉 provider 标记与结尾年份后，剩余部分须与组的中文名/原名一致，且年份不冲突。
+ * 用于用户直接选中剧集/电影文件夹整理时，避免在其中再嵌套一层「剧名 (年份)」目录。
+ */
+function olmDirIsMediaFolder(dirName, group) {
+  var s = String(dirName == null ? "" : dirName).trim();
+  if (!s || !group) return false;
+  s = s.replace(/[\[{【]\s*(tmdb|imdb|tvdb)[^\]}】]*[\]}】]/gi, " ");
+  var year = null;
+  var m = s.match(/^(.*?)[\s.\-_]*[（(\[]?((19|20)\d{2})[）)\]]?[\s.\-_]*$/);
+  if (m && m[1]) { year = parseInt(m[2], 10); s = m[1]; }
+  var key = titleKey(s);
+  if (!key) return false;
+  var tmdb = group.tmdb || null;
+  var gy = (tmdb && tmdb.year) || group.year || null;
+  if (year != null && gy != null && year !== gy) return false;
+  var names = [tmdb && tmdb.title, tmdb && tmdb.originalTitle, group.title, group.originalTitle];
+  for (var i = 0; i < names.length; i++) {
+    if (names[i] && titleKey(names[i]) === key) return true;
+  }
+  return false;
+}
+
+/*
  * 计算一个视频文件的目标（不含根目录、不含扩展名）
- * 返回 { folderRel: "剧名 (2020) [tmdbid=x]/Season 01", fileBase: "剧名 - S01E01 - 集标题" } 或 null
+ * 返回 { folderRel: "剧名 (2020) [tmdbid=x]/Season 01", innerRel: "Season 01"（电影为 ""），
+ *        fileBase: "剧名 - S01E01 - 集标题" } 或 null
+ * innerRel = 去掉「剧名 (年份)」层后的相对目录，供目标根本身就是影视文件夹时使用
  */
 function olmBuildMediaName(group, parsed, naming) {
   var tmdb = group.tmdb || null;
@@ -31,7 +57,7 @@ function olmBuildMediaName(group, parsed, naming) {
     if (naming.includeVersion && parsed.version) base += " - " + sanitizeFileName(parsed.version);
     if (parsed.part != null) base += " - part" + parsed.part;
     if (naming.includeResolution && parsed.resolution) base += " - " + parsed.resolution;
-    return { folderRel: sanitizeFileName(folder), fileBase: cleanupName(base) };
+    return { folderRel: sanitizeFileName(folder), innerRel: "", fileBase: cleanupName(base) };
   }
 
   if (group.type === "tv") {
@@ -56,6 +82,7 @@ function olmBuildMediaName(group, parsed, naming) {
     var epBase = title + " - " + epSeg + (epTitle ? " - " + epTitle : "");
     return {
       folderRel: showFolder + "/" + seasonDir,
+      innerRel: seasonDir,
       fileBase: cleanupName(epBase)
     };
   }

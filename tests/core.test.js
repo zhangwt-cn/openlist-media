@@ -116,6 +116,12 @@ function testLocalParse() {
   eq(p.year, 2021, "雪中 year 全角括号");
   eq(p.resolution, "1080p", "雪中 res");
 
+  p = O.localParseFile("百花杀（2026）/Blossoms.of.Power.S01E05.2026.2160p.WEB-DL.mp4", { sizeMB: 900 });
+  eq(p.title, "百花杀", "全角括号紧贴年份不残留半个括号");
+  eq(p.originalTitle, "Blossoms of Power", "英文文件名降为原名");
+  eq(p.year, 2026, "百花杀 year");
+  eq(p.episode, 5, "百花杀 ep");
+
   p = O.localParseFile("最新电影首发 www.dygod.org.txt", { sizeMB: 0.01 });
   eq(p.type, "junk", "广告 txt");
 
@@ -275,6 +281,19 @@ function testNamer() {
 
   var sc = O.scoreTmdbCandidate({ title: "流浪地球2", original_title: "The Wandering Earth II", release_date: "2023-01-22", popularity: 50 }, "流浪地球2", null, 2023);
   ok(sc >= 5, "tmdb 精确匹配得分 " + sc);
+
+  // 目录本身就是该影视的文件夹（用于避免重复嵌套）
+  var bg = { type: "tv", title: "百花杀", originalTitle: "Blossoms of Power", year: 2026, tmdb: { id: 286506, title: "百花杀", originalTitle: "百花杀", year: 2026 } };
+  ok(O.olmDirIsMediaFolder("百花杀（2026）", bg), "全角括号年份");
+  ok(O.olmDirIsMediaFolder("百花杀 (2026)", bg), "半角括号年份");
+  ok(O.olmDirIsMediaFolder("百花杀 (2026) [tmdbid=286506]", bg), "含 tmdbid 标记");
+  ok(O.olmDirIsMediaFolder("百花杀", bg), "裸剧名");
+  ok(O.olmDirIsMediaFolder("Blossoms of Power (2026)", bg), "英文原名目录");
+  ok(!O.olmDirIsMediaFolder("cn_tv", bg), "库目录不误判");
+  ok(!O.olmDirIsMediaFolder("百花杀（2020）", bg), "年份不符不算");
+  ok(!O.olmDirIsMediaFolder("凡人修仙传 第一季 (2020) 全12集 1080P", { type: "tv", title: "凡人修仙传", year: 2020, tmdb: null }), "带杂质的发布目录不算");
+  ok(O.olmBuildMediaName(tg, tp, naming).innerRel === "Season 01", "tv innerRel");
+  ok(O.olmBuildMediaName(mg, mp, naming).innerRel === "", "movie innerRel 为空");
 }
 
 /* ---------- 重命名排序 ---------- */
@@ -488,6 +507,36 @@ async function testPipeline() {
   eq(it01.parsed.year, 2020, "年份取自根目录名");
   eq(it01.dstDir, showRoot + "/凡人修仙传 (2020)/Season 01", "目标目录");
   eq(it01.dstName, "凡人修仙传 - S01E01.mp4", "目标文件名");
+
+  // 扫描根已是规范剧集文件夹（剧名+年份）→ 只建 Season 层，不再嵌套「剧名 (年份)」目录
+  var cleanRoot = "/media/tv/百花杀（2026）";
+  var fake6 = makeFakeOl((function () {
+    var m = {};
+    m[cleanRoot + "/Blossoms.of.Power.S01E05.2026.2160p.WEB-DL.mp4"] = 900 * 1048576;
+    m[cleanRoot + "/Blossoms.of.Power.S01E06.2026.2160p.WEB-DL.mp4"] = 900 * 1048576;
+    return m;
+  })());
+  var pipe6 = O.createPipeline({ ol: fake6, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task6 = await pipe6.organize(cleanRoot, {});
+  var e05 = null;
+  task6.items.forEach(function (x) { if (/S01E05/.test(x.file.name)) e05 = x; });
+  eq(e05.parsed.title, "百花杀", "剧名取自根目录名");
+  eq(e05.dstDir, cleanRoot + "/Season 01", "根目录即剧集文件夹时不重复嵌套");
+  eq(e05.dstName, "百花杀 - S01E05.mp4", "目标文件名");
+  eq(e05.action, "move");
+
+  // 扫描根已是规范电影文件夹 → 文件直接落在根目录
+  var movieRoot = "/media/movies/流浪地球2 (2023)";
+  var fake7 = makeFakeOl((function () {
+    var m = {};
+    m[movieRoot + "/流浪地球2.2023.2160p.WEB-DL.mkv"] = 8000 * 1048576;
+    return m;
+  })());
+  var pipe7 = O.createPipeline({ ol: fake7, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task7 = await pipe7.organize(movieRoot, {});
+  eq(task7.items[0].dstDir, movieRoot, "电影文件夹内不再嵌套");
+  eq(task7.items[0].dstName, "流浪地球2 (2023) - 2160p.mkv", "电影目标名");
+  eq(task7.items[0].action, "rename", "同目录内改名");
 
   // AI 收到的 path 也带根目录上下文
   var seenPaths = [];

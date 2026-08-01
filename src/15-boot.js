@@ -32,6 +32,7 @@ var OLM = {
   normalizeTmdbEntry: normalizeTmdbEntry,
   // 命名
   olmBuildMediaName: olmBuildMediaName,
+  olmDirIsMediaFolder: olmDirIsMediaFolder,
   olmGroupDisplay: olmGroupDisplay,
   // 流水线 / 执行
   createPipeline: createPipeline,
