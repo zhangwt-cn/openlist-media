@@ -302,6 +302,13 @@ function testNamer() {
   ok(!O.olmDirIsMediaFolder("疑犯追踪 (2012)", poi), "年份不符不算");
   eq(O.olmMediaFolderName(poi, naming), "疑犯追踪 (2011) [tmdbid=1411]", "规范文件夹名");
   eq(O.olmMediaFolderName({ type: "tv", title: "疑犯追踪", year: 2011, tmdb: null }, naming), "疑犯追踪 (2011)", "无 TMDB 的规范名");
+  ok(O.olmSeasonDirEquivalent("Season 1", 1), "Season 1 等价");
+  ok(O.olmSeasonDirEquivalent("season_02", 2), "season_02 等价");
+  ok(O.olmSeasonDirEquivalent("S03", 3), "S03 等价");
+  ok(O.olmSeasonDirEquivalent("第一季", 1), "第一季 等价");
+  ok(O.olmSeasonDirEquivalent("Specials", 0), "Specials ↔ 第0季");
+  ok(!O.olmSeasonDirEquivalent("Season 1", 2), "季号不同不等价");
+  ok(!O.olmSeasonDirEquivalent("Season 1 4K", 1), "带杂质不等价");
   ok(O.olmBuildMediaName(tg, tp, naming).innerRel === "Season 01", "tv innerRel");
   ok(O.olmBuildMediaName(mg, mp, naming).innerRel === "", "movie innerRel 为空");
 }
@@ -412,7 +419,15 @@ function makeFakeOl(init) {
       for (i = 0; i < names.length; i++) {
         if (!tree[dir] || !tree[dir][names[i]]) throw fail("remove: not found " + names[i]);
       }
-      for (i = 0; i < names.length; i++) delete tree[dir][names[i]];
+      for (i = 0; i < names.length; i++) {
+        var full = O.pathJoin(dir, names[i]);
+        if (tree[full]) {
+          Object.keys(tree).forEach(function (k) {
+            if (k === full || k.indexOf(full + "/") === 0) delete tree[k];
+          });
+        }
+        delete tree[dir][names[i]];
+      }
       return null;
     },
     removeEmptyDirectory: async function () { calls.push(["rmempty"]); return null; }
@@ -613,6 +628,15 @@ async function testExecutor() {
   ok(task.ops.length >= 8, "操作日志 " + task.ops.length + " 条");
   eq(task.stats.done, 4, "4 项完成");
   eq(task.stats.failed, 0, "0 失败");
+  eq((task.emptyDirs || []).length, 1, "检出 1 个搬空的原目录");
+  eq(task.emptyDirs[0], msgDir, "搬空的是消息目录");
+
+  // 删除空目录 → rmdir 撤销时重建
+  await fake.remove(O.pathDir(msgDir), [O.pathName(msgDir)]);
+  ok(!fake.isDir(msgDir), "空目录已删除");
+  var r0 = await exec.undo({ ops: [{ t: "rmdir", path: msgDir }] });
+  eq(r0.failed, 0, "rmdir 撤销成功");
+  ok(fake.isDir(msgDir), "撤销后目录已重建");
 
   // 撤销
   var rec = O.taskToRecord(task);
@@ -734,16 +758,27 @@ async function testRootFolderRename() {
     var m = {};
     m[poiRoot + "/Season 2/Person.of.Interest.S02E01.1080p.mkv"] = 2000 * 1048576;
     m[poiRoot + "/Season 2/Person.of.Interest.S02E02.1080p.mkv"] = 2000 * 1048576;
+    m[poiRoot + "/Person.of.Interest.S02E03.1080p.mkv"] = 2000 * 1048576;
     return m;
   })());
   var S = testSettings();
   var pipe = O.createPipeline({ ol: fake, ai: null, tmdb: null, getSettings: function () { return S; } });
   var task = await pipe.organize(poiRoot, {});
-  var e1 = null;
-  task.items.forEach(function (x) { if (/S02E01/.test(x.file.name)) e1 = x; });
+  var e1 = null, e3 = null;
+  task.items.forEach(function (x) {
+    if (/S02E01/.test(x.file.name)) e1 = x;
+    if (/S02E03/.test(x.file.name)) e3 = x;
+  });
   eq(e1.parsed.title, "疑犯追踪", "发布目录名解析出剧名");
-  eq(e1.dstDir, poiRoot + "/Season 02", "装饰目录名也不嵌套");
+  eq(e1.dstDir, poiRoot + "/Season 2", "复用已有等价季目录，不另建 Season 02");
   eq(e1.dstName, "疑犯追踪 - S02E01.mkv", "目标文件名");
+  eq(e1.action, "rename", "季目录内文件就地改名");
+  eq(e3.dstDir, poiRoot + "/Season 2", "散落文件并入已有季目录");
+  eq(e3.action, "move");
+  eq(task.dirRenames.length, 1, "季目录改名 1 项");
+  eq(task.dirRenames[0].from, "Season 2", "季目录改名 from");
+  eq(task.dirRenames[0].to, "Season 02", "季目录改名 to");
+  ok(task.dirRenames[0].include, "季目录改名默认勾选");
   ok(!!task.rootRename, "有根目录改名建议");
   eq(task.rootRename.to, "疑犯追踪 (2011)", "改名目标为规范名");
   ok(task.rootRename.include, "默认勾选");
@@ -751,8 +786,10 @@ async function testRootFolderRename() {
   var exec = O.createExecutor({ ol: fake, getSettings: function () { return S; }, sleepFn: function () { return Promise.resolve(); } });
   await exec.execute(task);
   eq(task.status, "done", "执行完成; " + task.log.join(" | "));
+  ok(!task.ops.some(function (op) { return op.t === "mkdir"; }), "复用季目录 → 无 mkdir");
   eq(task.renamedRoot, "/media/TV/疑犯追踪 (2011)", "根目录已改名");
-  ok(fake.has("/media/TV/疑犯追踪 (2011)/Season 02/疑犯追踪 - S02E01.mkv"), "文件在改名后的目录内");
+  ok(fake.has("/media/TV/疑犯追踪 (2011)/Season 02/疑犯追踪 - S02E01.mkv"), "文件在规范化后的季目录内");
+  ok(fake.has("/media/TV/疑犯追踪 (2011)/Season 02/疑犯追踪 - S02E03.mkv"), "散落文件也在季目录内");
   ok(!fake.isDir(poiRoot), "旧目录名不存在");
 
   var rec = O.taskToRecord(task);
@@ -760,7 +797,9 @@ async function testRootFolderRename() {
   var r = await exec.undo(rec);
   eq(r.failed, 0, "撤销无失败: " + (r.errors || []).join(";"));
   ok(fake.has(poiRoot + "/Season 2/Person.of.Interest.S02E01.1080p.mkv"), "撤销后回到原名原位");
+  ok(fake.has(poiRoot + "/Person.of.Interest.S02E03.1080p.mkv"), "散落文件也撤回原位");
   ok(!fake.isDir("/media/TV/疑犯追踪 (2011)"), "撤销后规范名目录不存在");
+  ok(!fake.isDir(poiRoot + "/Season 02"), "撤销后 Season 02 不存在");
 
   // 文件已规范、只差目录名 → 仅执行改名
   var onlyRoot = "/media/TV/疑犯追踪 (2011) 蓝光原盘";
@@ -773,11 +812,30 @@ async function testRootFolderRename() {
   var task2 = await pipe2.organize(onlyRoot, {});
   eq(task2.items[0].status, "same", "文件已规范");
   eq(task2.stats.included, 0, "无文件操作");
+  eq(task2.dirRenames.length, 0, "Season 01 已规范 → 无季目录改名");
   ok(task2.rootRename && task2.rootRename.to === "疑犯追踪 (2011)", "仍建议目录改名");
   var exec2 = O.createExecutor({ ol: fake2, getSettings: function () { return S; }, sleepFn: function () { return Promise.resolve(); } });
   await exec2.execute(task2);
   eq(task2.status, "done", "仅改名执行完成; " + task2.log.join(" | "));
   ok(fake2.has("/media/TV/疑犯追踪 (2011)/Season 01/疑犯追踪 - S01E01.mkv"), "改名后文件路径正确");
+
+  // 上次整理遗留的空季目录：整理后检出，提示删除
+  var messRoot = "/media/TV4/疑犯追踪 (2011) 4K";
+  var fakeM = makeFakeOl((function () {
+    var m = {};
+    m[messRoot + "/Season 01/疑犯追踪 - S01E01.mkv"] = 2000 * 1048576;
+    return m;
+  })());
+  await fakeM.mkdir(messRoot + "/Season 1");   // 遗留空目录
+  var pipeM = O.createPipeline({ ol: fakeM, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var taskM = await pipeM.organize(messRoot, {});
+  eq(taskM.dirRenames.length, 0, "规范 Season 01 已存在 → 不再动等价空目录");
+  ok(taskM.rootRename && taskM.rootRename.to === "疑犯追踪 (2011)", "根目录改名建议");
+  var execM = O.createExecutor({ ol: fakeM, getSettings: function () { return S; }, sleepFn: function () { return Promise.resolve(); } });
+  await execM.execute(taskM);
+  eq(taskM.status, "done", "执行完成; " + taskM.log.join(" | "));
+  eq((taskM.emptyDirs || []).length, 1, "检出遗留空目录");
+  eq(taskM.emptyDirs[0], "/media/TV4/疑犯追踪 (2011)/Season 1", "路径按改名后的根目录换算");
 
   // 规范名已被同级占用 → 冲突，不执行改名
   var occRoot = "/media/TV2/疑犯追踪 2011 蓝光";

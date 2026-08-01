@@ -45,6 +45,17 @@ function olmDirIsMediaFolder(dirName, group) {
   return olmIdentityMatchesGroup(olmParseDirName(dirName), group);
 }
 
+// 现有目录名是否等价于第 season 季的季目录（"Season 1"/"S01"/"第1季"；Specials ↔ season 0）
+function olmSeasonDirEquivalent(name, season) {
+  var s = String(name == null ? "" : name).trim();
+  var m = s.match(/^s(?:eason)?[\s._-]*(\d{1,3})$/i);
+  if (m) return parseInt(m[1], 10) === season;
+  if (/^specials?$/i.test(s)) return season === 0;
+  m = s.match(/^第\s*([0-9一二三四五六七八九十两]+)\s*季$/);
+  if (m) return cnNumToInt(m[1]) === season;
+  return false;
+}
+
 // 组的规范文件夹名："剧名 (年份) [tmdbid=x]"（与 olmBuildMediaName 的目录层一致，用于根目录改名建议）
 function olmMediaFolderName(group, naming) {
   var tmdb = group.tmdb || null;

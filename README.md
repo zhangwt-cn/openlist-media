@@ -32,7 +32,7 @@
 在「自定义头部」加入一行，保存后刷新前台即可：
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@v0.1.5/openlist-media.js" defer></script>
+<script src="https://cdn.jsdelivr.net/gh/zhangwt-cn/openlist-media@v0.1.6/openlist-media.js" defer></script>
 ```
 
 - 大陆网络 `cdn.jsdelivr.net` 不稳时换镜像域名（路径不变）：`fastly.jsdelivr.net` / `gcore.jsdelivr.net`
@@ -73,7 +73,7 @@ Fork 本仓库，改完代码 `git push` 即完成发布——内置 GitHub Acti
    - **AI 解析**：填 OpenAI 兼容接口。DeepSeek 示例：`base_url = https://api.deepseek.com/v1`，`model = deepseek-chat`；OpenAI 官方：`base_url = https://api.openai.com/v1`（只填域名会自动补 `/v1`，填完整 `/chat/completions` 地址也行），`model = gpt-4o-mini` 等。填入 API Key，点「测试 AI」
    - **TMDB**：到 [themoviedb.org](https://www.themoviedb.org/settings/api) 免费申请 API Key（v3 key 或 v4 令牌都支持）。大陆网络直连不通时把「API 地址」换成你的反代/镜像。点「测试 TMDB」
    - 都不配也能用：走本地规则解析（识别率低一些，无集标题）
-2. 回到**整理**页：目录默认取当前 OpenList 浏览路径，也可「浏览…」选择；「整理到目录」可选填本次的输出目录（留空 = 就地整理/按设置。若扫描目录本身就是某部影视的文件夹——哪怕是 `【XX剧集】疑犯追踪 (2011)【蓝光原盘】` 这种发布名，也会由规则+AI 识别出来，只在其中建 `Season xx` 结构不套娃，并在方案中附带一项可选的「目录改名为规范名」）→ **扫描并生成整理方案**
+2. 回到**整理**页：目录默认取当前 OpenList 浏览路径，也可「浏览…」选择；「整理到目录」可选填本次的输出目录（留空 = 就地整理/按设置。若扫描目录本身就是某部影视的文件夹——哪怕是 `【XX剧集】疑犯追踪 (2011)【蓝光原盘】` 这种发布名，也会由规则+AI 识别出来，不套娃；已有的 `Season 1` 等价季目录会直接**复用**（文件就地改名，不另建一份搬来搬去），最后把季目录/本目录名一并改规范，均可在方案中取消勾选）→ **扫描并生成整理方案**
 3. 预览方案：按影片分组展示，逐条 原路径 → 新路径；不想动的取消勾选；识别错的点「🔎 重新匹配」手动搜 TMDB，或点 ✎ 手改目标路径
 4. **执行**：按设置的间隔限速执行；完成后可在**记录**页随时**撤销**本次整理
 
@@ -137,10 +137,10 @@ demo/           OpenList 模拟服务器（python3 标准库）
 ## 安全边界
 
 - 默认只调用 `mkdir / rename / batch_rename / move / remove_empty_directory(可选)`，**默认不调用删除接口**
-- 仅当「垃圾文件处理」设为**直接删除**时，才对识别为垃圾的文件调用 `fs/remove`：方案中标红展示、执行确认框红字二次提示、放在所有移动/改名之后执行；删除不可撤销
+- 仅两处会调用 `fs/remove`，且都需要明确确认：①「垃圾文件处理」设为**直接删除**时删垃圾文件（方案中标红、执行确认框红字二次提示、放在所有移动/改名之后执行；不可撤销）；②整理完成后对**已搬空的原目录**，结果页提示并经确认才删除（删除前再次校验为空，撤销整理时自动重建）
 - 所有写操作先经人工预览确认；执行有操作日志与撤销
 - 冲突检测：方案内互撞、与目标位置现存文件相撞的条目会标红并默认不执行
 
 ---
 
-MIT License · 与 OpenListTeam 无隶属关系 · v0.1.5
+MIT License · 与 OpenListTeam 无隶属关系 · v0.1.6

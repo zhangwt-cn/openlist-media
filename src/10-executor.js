@@ -97,7 +97,8 @@ function createExecutor(deps) {
     });
     var rootRen = task.rootRename && task.rootRename.include && task.rootRename.status === "ok"
       ? task.rootRename : null;
-    if (!items.length && !rootRen) throw new Error("没有可执行的条目");
+    var dirRens = (task.dirRenames || []).filter(function (d) { return d.include && d.status === "ok"; });
+    if (!items.length && !rootRen && !dirRens.length) throw new Error("没有可执行的条目");
     task.status = "executing";
     task.startedAt = olmNowIso();
     opSeq = 0;
@@ -119,7 +120,7 @@ function createExecutor(deps) {
       if (it.dstDir && it.dstDir !== it.file.dir && !known[it.dstDir]) needDirs[it.dstDir] = true;
     }
     var dirList = Object.keys(needDirs).sort(function (a, b) { return a.length - b.length; });
-    var totalSteps = dirList.length + items.length + (rootRen ? 1 : 0);
+    var totalSteps = dirList.length + items.length + dirRens.length + (rootRen ? 1 : 0);
     var doneSteps = 0;
 
     for (i = 0; i < dirList.length; i++) {
@@ -368,10 +369,34 @@ function createExecutor(deps) {
       onProgress({ phase: "exec", done: Math.min(doneSteps, totalSteps), total: totalSteps, note: "删除垃圾文件" });
     }
 
-    /* E. 根目录改名（最后执行；撤销时最先还原，文件操作记录的旧路径因此始终有效） */
+    /* E. 目录名规范化（放最后执行；撤销时最先还原，文件操作记录的旧路径因此始终有效）
+     *    先季目录（Season 1 → Season 01），再根目录 */
+    var canNormalize = !items.length || items.some(function (x) { return x.status === "done"; });
+    for (i = 0; i < dirRens.length; i++) {
+      var dren = dirRens[i];
+      if (!canNormalize) {
+        dren.status = "skipped";
+        dren.reason = "文件操作无一成功，跳过目录改名";
+        continue;
+      }
+      try {
+        await writeOp(function () { return ol.rename(pathJoin(dren.dir, dren.from), dren.to); }, "rename dir " + dren.from);
+        task.ops.push({ t: "rename", dir: dren.dir, from: dren.from, to: dren.to });
+        dren.status = "done";
+        taskLog(task, "目录改名 " + dren.from + " → " + dren.to);
+      } catch (e) {
+        if (e instanceof OlmAuthError || (e && e.cancelled)) { finish(task, e); throw e; }
+        dren.status = "failed";
+        dren.reason = "目录改名失败: " + ((e && e.message) || e);
+        taskLog(task, "目录改名失败 " + dren.from + ": " + ((e && e.message) || e));
+      }
+      doneSteps++;
+      onProgress({ phase: "exec", done: Math.min(doneSteps, totalSteps), total: totalSteps, note: "目录改名" });
+    }
+
     if (rootRen) {
-      var anyDone = items.some(function (x) { return x.status === "done"; });
-      if (!items.length || anyDone) {
+      var anyDone = canNormalize;
+      if (anyDone) {
         try {
           await writeOp(function () { return ol.rename(task.root, rootRen.to); }, "rename root");
           task.ops.push({ t: "rename", dir: pathDir(task.root), from: rootRen.from, to: rootRen.to });
@@ -407,6 +432,38 @@ function createExecutor(deps) {
         taskLog(task, "清理空目录失败: " + ((e && e.message) || e));
       }
     }
+
+    /* F. 检出已搬空的原目录（含扫描时就已为空的遗留目录），供结果页提示删除 */
+    task.emptyDirs = [];
+    try {
+      var effRoot = task.renamedRoot || task.root;
+      var cand = {};
+      for (i = 0; i < items.length; i++) {
+        it = items[i];
+        if (it.status !== "done") continue;
+        if (it.action !== "move" && it.action !== "trash" && it.action !== "delete") continue;
+        var sdir = it.file.dir;
+        if (sdir && sdir !== task.root && sdir.indexOf(task.root + "/") === 0) cand[sdir] = 1;
+      }
+      var scanned = task._dirs || {};
+      for (var sk in scanned) {
+        if (scanned[sk] && scanned[sk].length === 0 && sk !== task.root && sk.indexOf(task.root + "/") === 0) cand[sk] = 1;
+      }
+      // 深目录在前：子目录先判定/先删除，父目录若只剩空子目录也能一并检出
+      var candList = Object.keys(cand).sort(function (a, b) { return b.length - a.length; });
+      var emptySet = {};
+      for (i = 0; i < candList.length; i++) {
+        var mapped = effRoot + candList[i].slice(task.root.length);
+        try {
+          var es = await ol.listAll(mapped);
+          var allEmpty = true;
+          for (var ei = 0; ei < es.length; ei++) {
+            if (!es[ei].is_dir || !emptySet[mapped + "/" + es[ei].name]) { allEmpty = false; break; }
+          }
+          if (allEmpty) { emptySet[mapped] = 1; task.emptyDirs.push(mapped); }
+        } catch (e) { /* 目录已不存在等，忽略 */ }
+      }
+    } catch (e) { /* 检测失败不影响任务结果 */ }
     return task;
   }
 
@@ -483,6 +540,9 @@ function createExecutor(deps) {
         } else if (op.t === "rename") {
           await writeOp(function () { return ol.rename(pathJoin(op.dir, op.to), op.from); }, "undo rename");
           done++;
+        } else if (op.t === "rmdir") {
+          await writeOp(function () { return ol.mkdir(op.path); }, "undo rmdir");
+          done++;   // 删除的空目录重建回来，后续文件移回才有落点
         } else if (op.t === "remove") {
           skippedDeletes++;   // 删除不可恢复，跳过
         }
@@ -490,7 +550,7 @@ function createExecutor(deps) {
       } catch (e) {
         if (e instanceof OlmAuthError) throw e;
         failed++;
-        errors.push((op.t === "move" ? "移回 " + op.name : "改回 " + op.to) + " 失败: " + ((e && e.message) || e));
+        errors.push((op.t === "move" ? "移回 " + op.name : op.t === "rmdir" ? "重建 " + op.path : "改回 " + op.to) + " 失败: " + ((e && e.message) || e));
       }
       onProgress({ phase: "undo", done: i + 1, total: ops.length });
     }

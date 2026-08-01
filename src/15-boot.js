@@ -36,6 +36,7 @@ var OLM = {
   olmIdentityMatchesGroup: olmIdentityMatchesGroup,
   olmParseDirName: olmParseDirName,
   olmMediaFolderName: olmMediaFolderName,
+  olmSeasonDirEquivalent: olmSeasonDirEquivalent,
   olmGroupDisplay: olmGroupDisplay,
   // 流水线 / 执行
   createPipeline: createPipeline,

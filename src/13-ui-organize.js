@@ -151,7 +151,7 @@ function olmRenderOrganize() {
   <div class="olm-card" style="color:#94a3b8;font-size:12.5px;line-height:2">
     <b style="color:#cbd5e1">流程</b>：扫描目录 → AI/规则解析文件名 → TMDB 匹配官方元数据 → 生成 Emby 规范命名方案 → <b style="color:#fbbf24">人工确认</b> → 限速执行 → 可一键撤销<br/>
     <b style="color:#cbd5e1">命名产物</b>：电影 <code>片名 (年份) [tmdbid=xxx]/片名 (年份) - 2160p.mkv</code>　剧集 <code>剧名 (年份) [tmdbid=xxx]/Season 01/剧名 - S01E01 - 集标题.mkv</code><br/>
-    <b style="color:#cbd5e1">安全</b>：只做 新建目录/重命名/移动，不调用删除接口；垃圾文件最多移入回收站目录；每次执行都有操作日志，支持撤销。
+    <b style="color:#cbd5e1">安全</b>：默认只做 新建目录/重命名/移动；删除仅两处且都需确认（垃圾文件的「直接删除」选项、整理后搬空的原目录）；每次执行都有操作日志，支持撤销（删除的文件除外，删除的空目录撤销时自动重建）。
   </div>`;
 }
 
@@ -201,17 +201,25 @@ function olmItemRow(task, it) {
   </tr>`;
 }
 
-// 方案页的「根目录改名」条（识别出扫描目录本身就是该影视的文件夹、但名字不规范时出现）
-function olmRootRenameBanner(task) {
+// 方案页的「目录名规范化」条：季目录改名（Season 1 → Season 01）与根目录改名
+function olmDirNormalizeBanner(task) {
   var rr = task.rootRename;
-  if (!rr) return "";
-  if (rr.status === "conflict") {
-    return `<div class="olm-banner warn">⚠ 目录名不规范，但无法自动改名：${escHtml(rr.reason)}</div>`;
+  var drs = task.dirRenames || [];
+  if (!rr && !drs.length) return "";
+  var parts = drs.map(function (d) {
+    return `<span class="path">${escHtml(d.from)}</span> → <span class="path">${escHtml(d.to)}</span>` +
+      (d.status === "conflict" ? `<span style="color:#fbbf24">（目标已存在，跳过）</span>` : "");
+  });
+  if (rr) {
+    parts.push(`本目录 → <b class="path" style="color:#34d399">${escHtml(rr.to)}</b>` +
+      (rr.status === "conflict" ? `<span style="color:#fbbf24">（${escHtml(rr.reason)}，跳过）</span>` : ""));
   }
+  var toggleable = (rr && rr.status === "ok") || drs.some(function (d) { return d.status === "ok"; });
+  var on = (rr && rr.status === "ok" && rr.include) || drs.some(function (d) { return d.status === "ok" && d.include; });
   return `<div class="olm-banner info">
-    <label class="olm-switch" style="margin:0;font-size:13px">
-      <input type="checkbox" data-chg="toggleRootRename" ${rr.include ? "checked" : ""}/>
-      整理完成后把本目录改名为 <b class="path" style="color:#34d399">${escHtml(rr.to)}</b>
+    <label class="olm-switch" style="margin:0;font-size:13px;align-items:flex-start">
+      <input type="checkbox" data-chg="toggleDirNormalize" ${on ? "checked" : ""} ${toggleable ? "" : "disabled"}/>
+      <span>整理完成后规范化目录名：${parts.join("　")}</span>
     </label>
   </div>`;
 }
@@ -285,10 +293,10 @@ function olmRenderPlan(st) {
     ${stats.excluded ? `<span class="olm-chip gray">跳过 ${stats.excluded}</span>` : ""}
     <span style="flex:1"></span>
     <button class="olm-btn" data-act="backToIdle">← 返回</button>
-    <button class="olm-btn pri" data-act="executePlan" ${stats.included || (task.rootRename && task.rootRename.include && task.rootRename.status === "ok") ? "" : "disabled"}>🚀 执行 ${stats.included} 项</button>
+    <button class="olm-btn pri" data-act="executePlan" ${stats.included || (task.rootRename && task.rootRename.include && task.rootRename.status === "ok") || (task.dirRenames || []).some(function (d) { return d.include && d.status === "ok"; }) ? "" : "disabled"}>🚀 执行 ${stats.included} 项</button>
   </div>
   <div class="olm-hint" style="margin:-6px 0 12px">目录：<span style="color:#94a3b8">${escHtml(task.root)}</span>${task.targetDir ? `　整理到：<span style="color:#34d399">${escHtml(task.targetDir)}</span>` : ""}　勾选=执行；✎ 可手动改目标路径；冲突项需修改或放弃其一。</div>
-  ${olmRootRenameBanner(task)}
+  ${olmDirNormalizeBanner(task)}
   ${groupsHtml || `<div class="olm-empty">没有识别到电影/剧集</div>`}
   ${otherHtml}`;
 }
@@ -321,6 +329,10 @@ function olmRenderResult(st) {
   <div class="olm-banner ${cls}" style="font-size:14px">${label}　—　成功 ${stats.done || 0} 项${stats.failed ? "，失败 " + stats.failed + " 项" : ""}</div>
   ${task.renamedRoot ? `<div class="olm-banner info">📁 目录已改名：<span class="path" style="color:#34d399">${escHtml(task.renamedRoot)}</span></div>` : ""}
   ${task.rootRename && task.rootRename.status === "failed" ? `<div class="olm-banner warn">⚠ ${escHtml(task.rootRename.reason)}</div>` : ""}
+  ${task.emptyDirs && task.emptyDirs.length ? `<div class="olm-banner info" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span style="flex:1;min-width:200px">🧹 ${task.emptyDirs.length} 个原目录已搬空：${task.emptyDirs.map(function (d) { return `<span class="path">${escHtml(olmRelToRoot(task.renamedRoot || task.root, pathDir(d), pathName(d)))}</span>`; }).join("、")}</span>
+    <button class="olm-btn sm warn" data-act="removeEmptySrcDirs" style="flex:none">删除空目录</button>
+  </div>` : ""}
   ${failed.length ? `<div class="olm-card"><b style="font-size:13px;color:#f87171">失败明细</b>
     <table class="olm-items"><tbody>${failed.map(function (it) {
       return `<tr><td style="width:46%"><div class="path">${escHtml(olmRelToRoot(task.root, it.file.dir, it.file.name))}</div></td><td><div class="olm-hint" style="margin:0">${escHtml(it.reason)}</div></td></tr>`;
@@ -432,11 +444,20 @@ function olmRefreshPlanAndRender() {
   });
 }
 
-olmUI.actions.toggleRootRename = function (el) {
+olmUI.actions.toggleDirNormalize = function (el) {
   var task = olmUI.state.organize.task;
-  if (!task || !task.rootRename) return;
-  task.rootRename.include = !!el.checked;
-  task.rootRename.userExcluded = !el.checked;
+  if (!task) return;
+  var on = !!el.checked;
+  if (task.rootRename && task.rootRename.status !== "conflict") {
+    task.rootRename.include = on;
+    task.rootRename.userExcluded = !on;
+  }
+  (task.dirRenames || []).forEach(function (d) {
+    if (d.status !== "conflict") {
+      d.include = on;
+      d.userExcluded = !on;
+    }
+  });
   olmRenderTab();
 };
 
@@ -616,10 +637,11 @@ olmUI.actions.executePlan = function () {
   var stats = task.stats || olmComputeStats(task.items);
   var s = olmGetSettings();
   var willRenameRoot = task.rootRename && task.rootRename.include && task.rootRename.status === "ok";
+  var dirRenN = (task.dirRenames || []).filter(function (d) { return d.include && d.status === "ok"; }).length;
   olmConfirm({
     title: "确认执行整理",
     html: `将执行 <b style="color:#34d399">${stats.included}</b> 项操作（移动 ${stats.move} / 改名 ${stats.rename}${stats.trash ? " / 回收 " + stats.trash : ""}${stats.del ? " / 删除 " + stats.del : ""}）。<br/>` +
-      (willRenameRoot ? `完成后目录将改名为 <b style="color:#34d399">${escHtml(task.rootRename.to)}</b>。<br/>` : "") +
+      (dirRenN || willRenameRoot ? `完成后规范化 ${dirRenN + (willRenameRoot ? 1 : 0)} 个目录名${willRenameRoot ? `（本目录 → <b style="color:#34d399">${escHtml(task.rootRename.to)}</b>）` : ""}。<br/>` : "") +
       (stats.del ? `<b style="color:#f87171">⚠ 其中 ${stats.del} 个垃圾文件将被永久删除，删除无法撤销！</b><br/>` : "") +
       `操作间隔 ${s.exec.intervalMs}ms（网盘限流保护，可在设置调整）。<br/>` +
       `所有操作会记录日志，完成后可整体撤销${stats.del ? "（删除除外）" : ""}。确定执行？`,
@@ -654,6 +676,44 @@ olmUI.actions.executePlan = function () {
       st.step = "result";
       olmRenderTab();
     }
+  });
+};
+
+olmUI.actions.removeEmptySrcDirs = function () {
+  var st = olmUI.state.organize;
+  var task = st.task;
+  if (!task || !task.emptyDirs || !task.emptyDirs.length) return;
+  var dirs = task.emptyDirs.slice();   // 已按"深目录在前"排序，子目录先删
+  olmConfirm({
+    title: "删除空目录",
+    html: `将删除 <b>${dirs.length}</b> 个已搬空的原目录。删除前会再次校验是否为空，非空则跳过；撤销整理时会自动重建。确定？`,
+    okText: "删除",
+    danger: true
+  }).then(function (ok) {
+    if (!ok) return;
+    var ol = createOpenListClient({});
+    (async function () {
+      var okN = 0, skipN = 0, failN = 0;
+      for (var i = 0; i < dirs.length; i++) {
+        var d = dirs[i];
+        try {
+          var es = await ol.listAll(d);
+          if (es.length) { skipN++; continue; }
+          await ol.remove(pathDir(d), [pathName(d)]);
+          task.ops.push({ t: "rmdir", path: d });
+          okN++;
+        } catch (e) { failN++; }
+      }
+      task.emptyDirs = [];
+      try {
+        if (st.record) {
+          st.record.ops = task.ops;
+          updateTaskRecord(st.record);
+        }
+      } catch (e) { olmLog("update record fail", e); }
+      olmToast("已删除 " + okN + " 个空目录" + (skipN ? "，非空跳过 " + skipN : "") + (failN ? "，失败 " + failN : ""), failN ? "err" : "ok", 4000);
+      olmRenderTab();
+    })();
   });
 };
 

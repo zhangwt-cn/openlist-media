@@ -12,6 +12,9 @@ function taskToRecord(task) {
     rootRename: task.rootRename
       ? { from: task.rootRename.from, to: task.rootRename.to, status: task.rootRename.status, reason: task.rootRename.reason || "" }
       : null,
+    dirRenames: (task.dirRenames || []).map(function (d) {
+      return { dir: d.dir, from: d.from, to: d.to, status: d.status };
+    }),
     status: task.status,
     stats: task.stats || null,
     groups: (task.groups || [])

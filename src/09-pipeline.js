@@ -332,6 +332,33 @@ function createPipeline(deps) {
       return olmIdentityMatchesGroup(ident, grp);
     }
 
+    // 计算目标目录：根目录是影视自身文件夹则不嵌套剧名层；
+    // 剧集优先复用已存在的等价季目录（如 Season 1 ≈ Season 01），避免另建一份再搬文件——
+    // 名字不规范的等价目录记入 dirRenamesMap，整理完成后整体改名规范
+    var dirRenamesMap = {};   // "父目录\n现名" → 规范名
+    function dstDirFor(base, grp, built, parsed) {
+      var flatten = baseIsGroupFolder(base, grp);
+      if (grp.type !== "tv" || !built.innerRel) {
+        return flatten ? base : base + "/" + built.folderRel;
+      }
+      var showDir = flatten ? base : base + "/" + built.folderRel.split("/")[0];
+      var canonical = built.innerRel;
+      var listing = task._dirs ? task._dirs[showDir] : undefined;
+      if (listing && listing.indexOf(canonical) === -1) {
+        var season = parsed.season == null ? 1 : parsed.season;
+        for (var k = 0; k < listing.length; k++) {
+          if (olmSeasonDirEquivalent(listing[k], season)) {
+            // Specials 本身就是 Emby 认可的特别篇目录名，不改名
+            if (!(season === 0 && /^specials?$/i.test(listing[k]))) {
+              dirRenamesMap[showDir + "\n" + listing[k]] = canonical;
+            }
+            return showDir + "/" + listing[k];
+          }
+        }
+      }
+      return showDir + "/" + canonical;
+    }
+
     // 先给视频定目标
     var videoByKey = {};   // type|titleKey|season|episode|part → item
     var i, it, g, p;
@@ -377,9 +404,7 @@ function createPipeline(deps) {
         continue;
       }
       var base = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
-      // 目标根本身就是这部影视的文件夹（直接整理剧集/电影文件夹）→ 不再嵌套「剧名 (年份)」层
-      var rel = baseIsGroupFolder(base, g) ? built.innerRel : built.folderRel;
-      it.dstDir = rel ? base + "/" + rel : base;
+      it.dstDir = dstDirFor(base, g, built, p);
       it.dstName = it.file.ext ? built.fileBase + "." + it.file.ext : built.fileBase;
       if (it.file.kind === "video" && p.type === "tv") {
         var vk = "tv|" + titleKey((g.tmdb && g.tmdb.title) || g.title) + "|" + (p.season == null ? 1 : p.season) + "|" + p.episode + "|" + (p.part || "");
@@ -409,8 +434,7 @@ function createPipeline(deps) {
         var built2 = olmBuildMediaName(g, p, s.naming);
         if (built2) {
           var base2 = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
-          var rel2 = baseIsGroupFolder(base2, g) ? built2.innerRel : built2.folderRel;
-          it.dstDir = rel2 ? base2 + "/" + rel2 : base2;
+          it.dstDir = dstDirFor(base2, g, built2, p);
           it.dstName = built2.fileBase + lang + "." + it.file.ext;
         } else {
           it.status = "excluded";
@@ -442,6 +466,22 @@ function createPipeline(deps) {
         }
       }
     }
+
+    // 季目录规范化改名清单（保留用户此前的勾选状态）
+    var prevDR = task.dirRenames || [];
+    task.dirRenames = Object.keys(dirRenamesMap).map(function (key) {
+      var seg = key.split("\n");
+      var prev = null;
+      for (var d = 0; d < prevDR.length; d++) {
+        if (prevDR[d].dir === seg[0] && prevDR[d].from === seg[1]) prev = prevDR[d];
+      }
+      return {
+        dir: seg[0], from: seg[1], to: dirRenamesMap[key],
+        userExcluded: prev ? !!prev.userExcluded : false,
+        include: prev ? !prev.userExcluded : true,
+        status: "ok", reason: ""
+      };
+    });
 
     // 根目录改名建议：扫描目录本身就是某部影视的文件夹但名字不规范（如带发布组前后缀装饰）。
     // 目录名解析出季号的不建议（多为「剧名 第二季」这类季文件夹，不该改成剧名层目录名）。
@@ -533,6 +573,22 @@ function createPipeline(deps) {
       }
     }
 
+    // 季目录改名：规范名是否已被占用
+    var drs = task.dirRenames || [];
+    for (i = 0; i < drs.length; i++) {
+      var dr = drs[i];
+      var dnames = dirs[dr.dir];
+      if (dnames && dnames.indexOf(dr.to) !== -1) {
+        dr.status = "conflict";
+        dr.include = false;
+        dr.reason = "已存在同名条目：" + pathJoin(dr.dir, dr.to);
+      } else if (dr.status === "conflict") {
+        dr.status = "ok";
+        dr.include = !dr.userExcluded;
+        dr.reason = "";
+      }
+    }
+
     // 根目录改名：上级目录里是否已被同名条目占用
     if (task.rootRename) {
       var rr = task.rootRename;
@@ -580,6 +636,7 @@ function createPipeline(deps) {
       targetDir: (o.targetDir == null ? "" : String(o.targetDir).trim().replace(/\/+$/, "")) || null,
       rootParsed: pr.rootParsed || null,
       rootRename: null,
+      dirRenames: [],
       status: "ready",
       groups: gb.groups,
       items: gb.items,
