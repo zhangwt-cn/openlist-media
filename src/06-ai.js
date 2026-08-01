@@ -17,6 +17,7 @@ var OLM_AI_SYSTEM_PROMPT = [
   "- part：上下部/CD1/part2 之类分段号（上=1 下=2），无则 null",
   "- lang：仅字幕文件填 chs|cht|eng|jpn|kor|null（简体/简中/GB→chs，繁体/BIG5→cht，双语/简英→chs）",
   "- confidence：0~1 你的把握程度",
+  "- i 为 -1 的特殊条目是本次扫描的根目录（是目录不是文件）：判断这个目录名指向哪部影视，同样输出 title/original_title/year（剧集目录 type:tv，电影目录 type:movie）；若它不指向某一部影视（如“电视剧”“下载”“合集”这类目录）则 type:unknown、title:null",
   "- items 必须与输入 files 一一对应，不得遗漏或增加，按 i 排列",
   "示例：",
   '输入 {"files":[{"i":0,"path":"凡人修仙传/【高清剧集网发布 www.DDHDTV.com】凡人修仙传[第10集][国语配音+中文字幕].Fan.Ren.Xiu.Xian.Zhuan.2020.S01E10.2160p.WEB-DL.H265.AAC-DDHDTV.mp4","size_mb":1200}]}',

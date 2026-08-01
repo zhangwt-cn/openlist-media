@@ -116,6 +116,10 @@ function testLocalParse() {
   eq(p.year, 2021, "雪中 year 全角括号");
   eq(p.resolution, "1080p", "雪中 res");
 
+  p = O.localParseFile("Breaking.Bad.2008.COMPLETE.BluRay.1080p.mkv", { sizeMB: 3000 });
+  eq(p.title, "Breaking Bad", ".COMPLETE 不被误当 .com 域名截断");
+  eq(p.year, 2008, "COMPLETE year");
+
   p = O.localParseFile("百花杀（2026）/Blossoms.of.Power.S01E05.2026.2160p.WEB-DL.mp4", { sizeMB: 900 });
   eq(p.title, "百花杀", "全角括号紧贴年份不残留半个括号");
   eq(p.originalTitle, "Blossoms of Power", "英文文件名降为原名");
@@ -291,7 +295,13 @@ function testNamer() {
   ok(O.olmDirIsMediaFolder("Blossoms of Power (2026)", bg), "英文原名目录");
   ok(!O.olmDirIsMediaFolder("cn_tv", bg), "库目录不误判");
   ok(!O.olmDirIsMediaFolder("百花杀（2020）", bg), "年份不符不算");
-  ok(!O.olmDirIsMediaFolder("凡人修仙传 第一季 (2020) 全12集 1080P", { type: "tv", title: "凡人修仙传", year: 2020, tmdb: null }), "带杂质的发布目录不算");
+  ok(O.olmDirIsMediaFolder("凡人修仙传 第一季 (2020) 全12集 1080P", { type: "tv", title: "凡人修仙传", year: 2020, tmdb: null }), "带集数画质杂质的发布目录也能识别");
+  var poi = { type: "tv", title: "疑犯追踪", originalTitle: "Person of Interest", year: 2011, tmdb: { id: 1411, title: "疑犯追踪", originalTitle: "Person of Interest", year: 2011 } };
+  ok(O.olmDirIsMediaFolder("【古早经典剧集】疑犯追踪 (2011) {tmdbid-1411}【欧美剧】 【全5季】 【蓝光原盘 Remux& 内封简英特效双语字幕 】", poi), "发布组装饰目录名");
+  ok(O.olmDirIsMediaFolder("Person.of.Interest.2011.COMPLETE.BluRay", poi), "英文点分目录名（原名匹配）");
+  ok(!O.olmDirIsMediaFolder("疑犯追踪 (2012)", poi), "年份不符不算");
+  eq(O.olmMediaFolderName(poi, naming), "疑犯追踪 (2011) [tmdbid=1411]", "规范文件夹名");
+  eq(O.olmMediaFolderName({ type: "tv", title: "疑犯追踪", year: 2011, tmdb: null }, naming), "疑犯追踪 (2011)", "无 TMDB 的规范名");
   ok(O.olmBuildMediaName(tg, tp, naming).innerRel === "Season 01", "tv innerRel");
   ok(O.olmBuildMediaName(mg, mp, naming).innerRel === "", "movie innerRel 为空");
 }
@@ -358,6 +368,16 @@ function makeFakeOl(init) {
       if (tree[dir][newName]) throw fail("rename: already exist " + newName);
       tree[dir][newName] = tree[dir][name];
       delete tree[dir][name];
+      // 目录重命名：子树的 key 一并迁移
+      if (tree[path]) {
+        var newBase = O.pathJoin(dir, newName);
+        Object.keys(tree).forEach(function (k) {
+          if (k === path || k.indexOf(path + "/") === 0) {
+            tree[newBase + k.slice(path.length)] = tree[k];
+            delete tree[k];
+          }
+        });
+      }
       return null;
     },
     batchRename: async function (srcDir, pairs) {
@@ -505,8 +525,9 @@ async function testPipeline() {
   eq(it01.parsed.season, 1, "季取自根目录名");
   eq(it01.parsed.episode, 1, "纯数字文件名当集数");
   eq(it01.parsed.year, 2020, "年份取自根目录名");
-  eq(it01.dstDir, showRoot + "/凡人修仙传 (2020)/Season 01", "目标目录");
+  eq(it01.dstDir, showRoot + "/Season 01", "根目录即剧集文件夹（发布名带装饰）→ 不嵌套");
   eq(it01.dstName, "凡人修仙传 - S01E01.mp4", "目标文件名");
+  ok(task4.rootRename == null, "根目录名含季号 → 不建议改名");
 
   // 扫描根已是规范剧集文件夹（剧名+年份）→ 只建 Season 层，不再嵌套「剧名 (年份)」目录
   var cleanRoot = "/media/tv/百花杀（2026）";
@@ -524,6 +545,7 @@ async function testPipeline() {
   eq(e05.dstDir, cleanRoot + "/Season 01", "根目录即剧集文件夹时不重复嵌套");
   eq(e05.dstName, "百花杀 - S01E05.mp4", "目标文件名");
   eq(e05.action, "move");
+  ok(task6.rootRename && task6.rootRename.to === "百花杀 (2026)", "全角括号目录名建议规范化改名");
 
   // 扫描根已是规范电影文件夹 → 文件直接落在根目录
   var movieRoot = "/media/movies/流浪地球2 (2023)";
@@ -537,20 +559,26 @@ async function testPipeline() {
   eq(task7.items[0].dstDir, movieRoot, "电影文件夹内不再嵌套");
   eq(task7.items[0].dstName, "流浪地球2 (2023) - 2160p.mkv", "电影目标名");
   eq(task7.items[0].action, "rename", "同目录内改名");
+  ok(task7.rootRename == null, "目录名已规范 → 无改名建议");
 
-  // AI 收到的 path 也带根目录上下文
+  // AI 收到的 path 也带根目录上下文；根目录自身作为 i:-1 条目交给 AI 识别身份
   var seenPaths = [];
   var fakeAi = {
     parseFiles: async function (entries) {
       entries.forEach(function (e) { seenPaths.push(e.path); });
-      return { byI: {}, errors: [] };
+      var byI = {};
+      byI[-1] = O.normalizeAiItem({ i: -1, type: "tv", title: "凡人修仙传", year: 2020, season: 1, confidence: 0.9 });
+      return { byI: byI, errors: [] };
     }
   };
   var S2 = O.deepMerge(S, { ai: { enabled: true, apiKey: "x" } });
   var pipe5 = O.createPipeline({ ol: fake4, ai: fakeAi, tmdb: null, getSettings: function () { return S2; } });
-  await pipe5.organize(showRoot, {});
-  ok(seenPaths.length === 2, "AI 收到 2 个文件");
+  var task5 = await pipe5.organize(showRoot, {});
+  ok(seenPaths.length === 3, "AI 收到 2 个文件 + 1 个根目录条目");
   ok(seenPaths[0].indexOf("凡人修仙传 第一季 (2020) 全12集 1080P/") !== -1, "AI path 含根目录名: " + seenPaths[0]);
+  eq(seenPaths[2], "downloads/凡人修仙传 第一季 (2020) 全12集 1080P", "根目录条目带上级目录上下文");
+  eq(task5.rootParsed.from, "ai", "根目录身份采用 AI 结果");
+  eq(task5.rootParsed.title, "凡人修仙传", "AI 识别的根目录剧名");
 }
 
 /* ---------- 执行器 + 撤销 ---------- */
@@ -698,6 +726,73 @@ async function testTargetDirAndDelete() {
   eq(rec.status, "undone", "撤销状态");
 }
 
+/* ---------- 根目录即影视文件夹：不嵌套 + 目录名规范化 ---------- */
+async function testRootFolderRename() {
+  section("root folder rename");
+  var poiRoot = "/media/TV/【古早经典剧集】疑犯追踪 (2011)【欧美剧】【全5季】【蓝光原盘 Remux】";
+  var fake = makeFakeOl((function () {
+    var m = {};
+    m[poiRoot + "/Season 2/Person.of.Interest.S02E01.1080p.mkv"] = 2000 * 1048576;
+    m[poiRoot + "/Season 2/Person.of.Interest.S02E02.1080p.mkv"] = 2000 * 1048576;
+    return m;
+  })());
+  var S = testSettings();
+  var pipe = O.createPipeline({ ol: fake, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task = await pipe.organize(poiRoot, {});
+  var e1 = null;
+  task.items.forEach(function (x) { if (/S02E01/.test(x.file.name)) e1 = x; });
+  eq(e1.parsed.title, "疑犯追踪", "发布目录名解析出剧名");
+  eq(e1.dstDir, poiRoot + "/Season 02", "装饰目录名也不嵌套");
+  eq(e1.dstName, "疑犯追踪 - S02E01.mkv", "目标文件名");
+  ok(!!task.rootRename, "有根目录改名建议");
+  eq(task.rootRename.to, "疑犯追踪 (2011)", "改名目标为规范名");
+  ok(task.rootRename.include, "默认勾选");
+
+  var exec = O.createExecutor({ ol: fake, getSettings: function () { return S; }, sleepFn: function () { return Promise.resolve(); } });
+  await exec.execute(task);
+  eq(task.status, "done", "执行完成; " + task.log.join(" | "));
+  eq(task.renamedRoot, "/media/TV/疑犯追踪 (2011)", "根目录已改名");
+  ok(fake.has("/media/TV/疑犯追踪 (2011)/Season 02/疑犯追踪 - S02E01.mkv"), "文件在改名后的目录内");
+  ok(!fake.isDir(poiRoot), "旧目录名不存在");
+
+  var rec = O.taskToRecord(task);
+  eq(rec.renamedRoot, "/media/TV/疑犯追踪 (2011)", "记录含改名信息");
+  var r = await exec.undo(rec);
+  eq(r.failed, 0, "撤销无失败: " + (r.errors || []).join(";"));
+  ok(fake.has(poiRoot + "/Season 2/Person.of.Interest.S02E01.1080p.mkv"), "撤销后回到原名原位");
+  ok(!fake.isDir("/media/TV/疑犯追踪 (2011)"), "撤销后规范名目录不存在");
+
+  // 文件已规范、只差目录名 → 仅执行改名
+  var onlyRoot = "/media/TV/疑犯追踪 (2011) 蓝光原盘";
+  var fake2 = makeFakeOl((function () {
+    var m = {};
+    m[onlyRoot + "/Season 01/疑犯追踪 - S01E01.mkv"] = 2000 * 1048576;
+    return m;
+  })());
+  var pipe2 = O.createPipeline({ ol: fake2, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task2 = await pipe2.organize(onlyRoot, {});
+  eq(task2.items[0].status, "same", "文件已规范");
+  eq(task2.stats.included, 0, "无文件操作");
+  ok(task2.rootRename && task2.rootRename.to === "疑犯追踪 (2011)", "仍建议目录改名");
+  var exec2 = O.createExecutor({ ol: fake2, getSettings: function () { return S; }, sleepFn: function () { return Promise.resolve(); } });
+  await exec2.execute(task2);
+  eq(task2.status, "done", "仅改名执行完成; " + task2.log.join(" | "));
+  ok(fake2.has("/media/TV/疑犯追踪 (2011)/Season 01/疑犯追踪 - S01E01.mkv"), "改名后文件路径正确");
+
+  // 规范名已被同级占用 → 冲突，不执行改名
+  var occRoot = "/media/TV2/疑犯追踪 2011 蓝光";
+  var fake3 = makeFakeOl((function () {
+    var m = {};
+    m[occRoot + "/Person.of.Interest.S01E01.mkv"] = 2000 * 1048576;
+    m["/media/TV2/疑犯追踪 (2011)/占位.txt"] = 1;
+    return m;
+  })());
+  var pipe3 = O.createPipeline({ ol: fake3, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task3 = await pipe3.organize(occRoot, {});
+  ok(task3.rootRename && task3.rootRename.status === "conflict", "同名占用 → 冲突");
+  ok(!task3.rootRename.include, "冲突项不勾选");
+}
+
 /* ---------- run ---------- */
 async function main() {
   testUtils();
@@ -711,6 +806,7 @@ async function main() {
   await testExecutorSwap();
   await testTrashMode();
   await testTargetDirAndDelete();
+  await testRootFolderRename();
   print("ALL TESTS PASSED (" + __n + " assertions)");
 }
 

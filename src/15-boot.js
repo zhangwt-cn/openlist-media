@@ -33,6 +33,9 @@ var OLM = {
   // 命名
   olmBuildMediaName: olmBuildMediaName,
   olmDirIsMediaFolder: olmDirIsMediaFolder,
+  olmIdentityMatchesGroup: olmIdentityMatchesGroup,
+  olmParseDirName: olmParseDirName,
+  olmMediaFolderName: olmMediaFolderName,
   olmGroupDisplay: olmGroupDisplay,
   // 流水线 / 执行
   createPipeline: createPipeline,

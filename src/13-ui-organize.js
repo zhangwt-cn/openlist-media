@@ -137,7 +137,7 @@ function olmRenderOrganize() {
         <input class="olm-input mono" id="olm-target" value="${escHtml(st.targetDir || "")}" placeholder="本次整理的输出目录，如 /网盘/媒体库/剧集" />
         <button class="olm-btn" data-act="pickTargetDir" style="flex:none">浏览…</button>
       </div>
-      <div class="olm-hint">电影/剧集的规范目录会建到这里（垃圾回收站仍在扫描目录内）。整理单个剧集文件夹时，选它的上级目录即可避免套娃。</div>
+      <div class="olm-hint">电影/剧集的规范目录会建到这里（垃圾回收站仍在扫描目录内）。直接整理某部影视自己的文件夹时无需填写：会自动识别并只建 Season 结构，还可顺带把目录名改规范。</div>
     </div>
     <div class="olm-row" style="flex-wrap:wrap;gap:16px;margin-top:4px">
       <label class="olm-switch"><input type="checkbox" data-chg="quickRecursive" ${s.organize.recursive ? "checked" : ""}/> 递归子目录（深度 ${s.organize.maxDepth}）</label>
@@ -199,6 +199,21 @@ function olmItemRow(task, it) {
     <td style="width:76px">${olmStatusChip(it)}</td>
     <td style="width:34px">${it.status !== "done" ? `<button class="olm-iconbtn" data-act="editItem" data-id="${it.id}" title="手动编辑目标路径">✎</button>` : ""}</td>
   </tr>`;
+}
+
+// 方案页的「根目录改名」条（识别出扫描目录本身就是该影视的文件夹、但名字不规范时出现）
+function olmRootRenameBanner(task) {
+  var rr = task.rootRename;
+  if (!rr) return "";
+  if (rr.status === "conflict") {
+    return `<div class="olm-banner warn">⚠ 目录名不规范，但无法自动改名：${escHtml(rr.reason)}</div>`;
+  }
+  return `<div class="olm-banner info">
+    <label class="olm-switch" style="margin:0;font-size:13px">
+      <input type="checkbox" data-chg="toggleRootRename" ${rr.include ? "checked" : ""}/>
+      整理完成后把本目录改名为 <b class="path" style="color:#34d399">${escHtml(rr.to)}</b>
+    </label>
+  </div>`;
 }
 
 function olmRenderPlan(st) {
@@ -270,9 +285,10 @@ function olmRenderPlan(st) {
     ${stats.excluded ? `<span class="olm-chip gray">跳过 ${stats.excluded}</span>` : ""}
     <span style="flex:1"></span>
     <button class="olm-btn" data-act="backToIdle">← 返回</button>
-    <button class="olm-btn pri" data-act="executePlan" ${stats.included ? "" : "disabled"}>🚀 执行 ${stats.included} 项</button>
+    <button class="olm-btn pri" data-act="executePlan" ${stats.included || (task.rootRename && task.rootRename.include && task.rootRename.status === "ok") ? "" : "disabled"}>🚀 执行 ${stats.included} 项</button>
   </div>
   <div class="olm-hint" style="margin:-6px 0 12px">目录：<span style="color:#94a3b8">${escHtml(task.root)}</span>${task.targetDir ? `　整理到：<span style="color:#34d399">${escHtml(task.targetDir)}</span>` : ""}　勾选=执行；✎ 可手动改目标路径；冲突项需修改或放弃其一。</div>
+  ${olmRootRenameBanner(task)}
   ${groupsHtml || `<div class="olm-empty">没有识别到电影/剧集</div>`}
   ${otherHtml}`;
 }
@@ -303,6 +319,8 @@ function olmRenderResult(st) {
   var label = { done: "✓ 整理完成", partial: "⚠ 部分完成", failed: "✕ 执行失败" }[task.status] || task.status;
   return `
   <div class="olm-banner ${cls}" style="font-size:14px">${label}　—　成功 ${stats.done || 0} 项${stats.failed ? "，失败 " + stats.failed + " 项" : ""}</div>
+  ${task.renamedRoot ? `<div class="olm-banner info">📁 目录已改名：<span class="path" style="color:#34d399">${escHtml(task.renamedRoot)}</span></div>` : ""}
+  ${task.rootRename && task.rootRename.status === "failed" ? `<div class="olm-banner warn">⚠ ${escHtml(task.rootRename.reason)}</div>` : ""}
   ${failed.length ? `<div class="olm-card"><b style="font-size:13px;color:#f87171">失败明细</b>
     <table class="olm-items"><tbody>${failed.map(function (it) {
       return `<tr><td style="width:46%"><div class="path">${escHtml(olmRelToRoot(task.root, it.file.dir, it.file.name))}</div></td><td><div class="olm-hint" style="margin:0">${escHtml(it.reason)}</div></td></tr>`;
@@ -413,6 +431,14 @@ function olmRefreshPlanAndRender() {
     olmRenderTab();
   });
 }
+
+olmUI.actions.toggleRootRename = function (el) {
+  var task = olmUI.state.organize.task;
+  if (!task || !task.rootRename) return;
+  task.rootRename.include = !!el.checked;
+  task.rootRename.userExcluded = !el.checked;
+  olmRenderTab();
+};
 
 olmUI.actions.toggleItem = function (el) {
   var it = olmFindItem(el.getAttribute("data-id"));
@@ -589,9 +615,11 @@ olmUI.actions.executePlan = function () {
   var task = st.task;
   var stats = task.stats || olmComputeStats(task.items);
   var s = olmGetSettings();
+  var willRenameRoot = task.rootRename && task.rootRename.include && task.rootRename.status === "ok";
   olmConfirm({
     title: "确认执行整理",
     html: `将执行 <b style="color:#34d399">${stats.included}</b> 项操作（移动 ${stats.move} / 改名 ${stats.rename}${stats.trash ? " / 回收 " + stats.trash : ""}${stats.del ? " / 删除 " + stats.del : ""}）。<br/>` +
+      (willRenameRoot ? `完成后目录将改名为 <b style="color:#34d399">${escHtml(task.rootRename.to)}</b>。<br/>` : "") +
       (stats.del ? `<b style="color:#f87171">⚠ 其中 ${stats.del} 个垃圾文件将被永久删除，删除无法撤销！</b><br/>` : "") +
       `操作间隔 ${s.exec.intervalMs}ms（网盘限流保护，可在设置调整）。<br/>` +
       `所有操作会记录日志，完成后可整体撤销${stats.del ? "（删除除外）" : ""}。确定执行？`,

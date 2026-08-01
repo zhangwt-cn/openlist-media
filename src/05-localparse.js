@@ -3,7 +3,7 @@
 var OLM_AD_TLDS = "com|net|org|cn|cc|tv|me|io|co|vip|xyz|top|club|la|life|live|site|online|store|fun|icu|pro|info|app|one|red|run|link|art|ltd|group|work|team|cloud|space|world|today|video|movie|film|fans|wang|xin|shop|host|press|website|win|buzz|cyou|best|lol|pw|tk|ml|ga|cf|gq";
 
 var RE_OLM_URL = new RegExp(
-  "(?:https?://)?(?:www\\.)?[a-z0-9][a-z0-9-]*(?:\\.[a-z0-9-]+)*\\.(?:" + OLM_AD_TLDS + ")(?:/[^\\s\\]】]*)?",
+  "(?:https?://)?(?:www\\.)?[a-z0-9][a-z0-9-]*(?:\\.[a-z0-9-]+)*\\.(?:" + OLM_AD_TLDS + ")(?![a-z0-9-])(?:/[^\\s\\]】]*)?",
   "gi"
 );
 

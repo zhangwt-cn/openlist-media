@@ -117,6 +117,15 @@ function createPipeline(deps) {
     var parsedList = files.map(function (f) {
       return localParseFile(ctxPath(f.relPath), { sizeMB: f.sizeMB, kind: f.kind, minVideoMB: minVideoMB });
     });
+    // 扫描根目录自己的影视身份（本地解析打底，AI 结果覆盖）：
+    // 用于判断"根目录本身就是某部影视的文件夹"，避免整理时再嵌套一层剧名目录
+    var rootName = segs.length ? segs[segs.length - 1] : "";
+    var dpRoot = olmParseDirName(rootName);
+    var rootParsed = {
+      type: "unknown", title: dpRoot.title, originalTitle: dpRoot.originalTitle,
+      year: dpRoot.year, season: dpRoot.season, episode: null, episodeEnd: null,
+      resolution: null, version: null, part: null, lang: null, confidence: 0.3, from: "local"
+    };
     var aiErrors = [];
     if (s.ai.enabled && s.ai.apiKey && deps.ai) {
       // 只把媒体类文件交给 AI，省 token；junk/meta 扩展名本地即可判定
@@ -125,6 +134,9 @@ function createPipeline(deps) {
         if (files[i].kind === "video" || files[i].kind === "subtitle") {
           entries.push({ i: i, path: ctxPath(files[i].relPath), sizeMB: files[i].sizeMB });
         }
+      }
+      if (entries.length && ctx) {
+        entries.push({ i: -1, path: ctx, sizeMB: null }); // 根目录名也交给 AI 识别身份
       }
       if (entries.length) {
         var r = await deps.ai.parseFiles(entries, {
@@ -142,10 +154,11 @@ function createPipeline(deps) {
             }
           }
         }
+        if (r.byI[-1]) rootParsed = mergeParsed(r.byI[-1], rootParsed);
       }
     }
     checkCancel();
-    return { parsedList: parsedList, aiErrors: aiErrors };
+    return { parsedList: parsedList, aiErrors: aiErrors, rootParsed: rootParsed };
   }
 
   /* ---- 分组 ---- */
@@ -310,6 +323,15 @@ function createPipeline(deps) {
     var roots = resolveRoots(task.root, task.targetDir);
     var junkAction = s.organize.junkAction;
 
+    // 目标根目录的影视身份：扫描根用解析阶段的结果（含 AI 识别），其它目标目录现场解析
+    var identCache = {};
+    function baseIsGroupFolder(base, grp) {
+      var ident;
+      if (base === task.root && task.rootParsed) ident = task.rootParsed;
+      else ident = identCache[base] || (identCache[base] = olmParseDirName(pathName(base)));
+      return olmIdentityMatchesGroup(ident, grp);
+    }
+
     // 先给视频定目标
     var videoByKey = {};   // type|titleKey|season|episode|part → item
     var i, it, g, p;
@@ -356,7 +378,7 @@ function createPipeline(deps) {
       }
       var base = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
       // 目标根本身就是这部影视的文件夹（直接整理剧集/电影文件夹）→ 不再嵌套「剧名 (年份)」层
-      var rel = olmDirIsMediaFolder(pathName(base), g) ? built.innerRel : built.folderRel;
+      var rel = baseIsGroupFolder(base, g) ? built.innerRel : built.folderRel;
       it.dstDir = rel ? base + "/" + rel : base;
       it.dstName = it.file.ext ? built.fileBase + "." + it.file.ext : built.fileBase;
       if (it.file.kind === "video" && p.type === "tv") {
@@ -387,7 +409,7 @@ function createPipeline(deps) {
         var built2 = olmBuildMediaName(g, p, s.naming);
         if (built2) {
           var base2 = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
-          var rel2 = olmDirIsMediaFolder(pathName(base2), g) ? built2.innerRel : built2.folderRel;
+          var rel2 = baseIsGroupFolder(base2, g) ? built2.innerRel : built2.folderRel;
           it.dstDir = rel2 ? base2 + "/" + rel2 : base2;
           it.dstName = built2.fileBase + lang + "." + it.file.ext;
         } else {
@@ -418,6 +440,35 @@ function createPipeline(deps) {
           it.include = true;
           it.status = "ok";
         }
+      }
+    }
+
+    // 根目录改名建议：扫描目录本身就是某部影视的文件夹但名字不规范（如带发布组前后缀装饰）。
+    // 目录名解析出季号的不建议（多为「剧名 第二季」这类季文件夹，不该改成剧名层目录名）。
+    var prevRR = task.rootRename;
+    task.rootRename = null;
+    var rootName = pathName(task.root);
+    var rootIdent = task.rootParsed || olmParseDirName(rootName);
+    if (rootName && rootIdent.season == null) {
+      var rrGroup = null;
+      for (i = 0; i < task.groups.length; i++) {
+        g = task.groups[i];
+        if (g.type !== "movie" && g.type !== "tv") continue;
+        if ((g.type === "movie" ? roots.movieRoot : roots.tvRoot) !== task.root) continue;
+        if (!olmIdentityMatchesGroup(rootIdent, g)) continue;
+        if (!rrGroup || (g.itemIds || []).length > (rrGroup.itemIds || []).length) rrGroup = g;
+      }
+      var wantName = rrGroup ? olmMediaFolderName(rrGroup, s.naming) : null;
+      if (wantName && wantName !== rootName) {
+        task.rootRename = {
+          from: rootName,
+          to: wantName,
+          groupId: rrGroup.id,
+          userExcluded: prevRR ? !!prevRR.userExcluded : false,
+          include: prevRR ? !prevRR.userExcluded : true,
+          status: "ok",
+          reason: ""
+        };
       }
     }
   }
@@ -481,6 +532,30 @@ function createPipeline(deps) {
         it.reason = "目标位置已存在同名文件：" + occupantPath;
       }
     }
+
+    // 根目录改名：上级目录里是否已被同名条目占用
+    if (task.rootRename) {
+      var rr = task.rootRename;
+      var parentDir = pathDir(task.root);
+      if (dirs[parentDir] === undefined) {
+        try {
+          var pes = await ol.listAll(parentDir);
+          dirs[parentDir] = pes.map(function (e) { return e.name; });
+        } catch (e3) {
+          dirs[parentDir] = null;
+        }
+      }
+      var sib = dirs[parentDir];
+      if (sib && sib.indexOf(rr.to) !== -1) {
+        rr.status = "conflict";
+        rr.include = false;
+        rr.reason = "上级目录已存在同名条目：" + pathJoin(parentDir, rr.to);
+      } else if (rr.status === "conflict") {
+        rr.status = "ok";
+        rr.include = !rr.userExcluded;
+        rr.reason = "";
+      }
+    }
   }
 
   /* ---- 主流程 ---- */
@@ -503,6 +578,8 @@ function createPipeline(deps) {
       createdAt: olmNowIso(),
       root: root,
       targetDir: (o.targetDir == null ? "" : String(o.targetDir).trim().replace(/\/+$/, "")) || null,
+      rootParsed: pr.rootParsed || null,
+      rootRename: null,
       status: "ready",
       groups: gb.groups,
       items: gb.items,

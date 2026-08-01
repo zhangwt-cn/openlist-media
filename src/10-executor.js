@@ -95,7 +95,9 @@ function createExecutor(deps) {
       return it.include && it.status === "ok" &&
         ((it.dstDir && it.dstName) || it.action === "delete");
     });
-    if (!items.length) throw new Error("没有可执行的条目");
+    var rootRen = task.rootRename && task.rootRename.include && task.rootRename.status === "ok"
+      ? task.rootRename : null;
+    if (!items.length && !rootRen) throw new Error("没有可执行的条目");
     task.status = "executing";
     task.startedAt = olmNowIso();
     opSeq = 0;
@@ -117,7 +119,7 @@ function createExecutor(deps) {
       if (it.dstDir && it.dstDir !== it.file.dir && !known[it.dstDir]) needDirs[it.dstDir] = true;
     }
     var dirList = Object.keys(needDirs).sort(function (a, b) { return a.length - b.length; });
-    var totalSteps = dirList.length + items.length;
+    var totalSteps = dirList.length + items.length + (rootRen ? 1 : 0);
     var doneSteps = 0;
 
     for (i = 0; i < dirList.length; i++) {
@@ -366,12 +368,40 @@ function createExecutor(deps) {
       onProgress({ phase: "exec", done: Math.min(doneSteps, totalSteps), total: totalSteps, note: "删除垃圾文件" });
     }
 
+    /* E. 根目录改名（最后执行；撤销时最先还原，文件操作记录的旧路径因此始终有效） */
+    if (rootRen) {
+      var anyDone = items.some(function (x) { return x.status === "done"; });
+      if (!items.length || anyDone) {
+        try {
+          await writeOp(function () { return ol.rename(task.root, rootRen.to); }, "rename root");
+          task.ops.push({ t: "rename", dir: pathDir(task.root), from: rootRen.from, to: rootRen.to });
+          rootRen.status = "done";
+          task.renamedRoot = pathJoin(pathDir(task.root), rootRen.to);
+          taskLog(task, "目录改名 " + rootRen.from + " → " + rootRen.to);
+        } catch (e) {
+          if (e instanceof OlmAuthError || (e && e.cancelled)) { finish(task, e); throw e; }
+          rootRen.status = "failed";
+          rootRen.reason = "目录改名失败: " + ((e && e.message) || e);
+          taskLog(task, "目录改名失败: " + ((e && e.message) || e));
+        }
+      } else {
+        rootRen.status = "skipped";
+        rootRen.reason = "文件操作无一成功，跳过目录改名";
+        taskLog(task, "跳过目录改名（文件操作无一成功）");
+      }
+      doneSteps++;
+      onProgress({ phase: "exec", done: Math.min(doneSteps, totalSteps), total: totalSteps, note: "目录改名" });
+    }
+
     /* 收尾 */
     finish(task, null);
+    if (rootRen && rootRen.status === "failed") {
+      task.status = items.length ? (task.status === "done" ? "partial" : task.status) : "failed";
+    }
 
     if (s.organize.cleanEmptyDirs && task.status !== "failed") {
       try {
-        await writeOp(function () { return ol.removeEmptyDirectory(task.root); }, "clean empty dirs");
+        await writeOp(function () { return ol.removeEmptyDirectory(task.renamedRoot || task.root); }, "clean empty dirs");
         taskLog(task, "已清理空目录");
       } catch (e) {
         taskLog(task, "清理空目录失败: " + ((e && e.message) || e));

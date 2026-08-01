@@ -8,6 +8,10 @@ function taskToRecord(task) {
     finishedAt: task.finishedAt || null,
     undoneAt: task.undoneAt || null,
     root: task.root,
+    renamedRoot: task.renamedRoot || null,
+    rootRename: task.rootRename
+      ? { from: task.rootRename.from, to: task.rootRename.to, status: task.rootRename.status, reason: task.rootRename.reason || "" }
+      : null,
     status: task.status,
     stats: task.stats || null,
     groups: (task.groups || [])

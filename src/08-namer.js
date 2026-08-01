@@ -11,28 +11,51 @@ function olmGroupDisplay(group) {
   return t + (y ? " (" + y + ")" : "");
 }
 
+// 解析目录名的影视身份：先剥掉 provider 标记（{tmdbid-1411} 这类花括号形式解析器不认识），再走完整解析
+function olmParseDirName(dirName) {
+  var s = String(dirName == null ? "" : dirName).replace(/[\[{【]\s*(tmdb|imdb|tvdb)[^\]}】]*[\]}】]/gi, " ");
+  return parseNameCore(s);
+}
+
 /*
- * 判断目录名是否就是该组影视自己的文件夹（如 "百花杀（2026）"、"凡人修仙传 (2020) [tmdbid=x]"）：
- * 去掉 provider 标记与结尾年份后，剩余部分须与组的中文名/原名一致，且年份不冲突。
+ * 身份比对：identity（{title, originalTitle, year}，来自目录名解析或 AI）指的是否就是该组影视。
+ * 标题（中文名或原名）与组的 TMDB 中文名/原名/解析名一致，且年份不冲突。
+ */
+function olmIdentityMatchesGroup(identity, group) {
+  if (!identity || !group || !identity.title) return false;
+  var tmdb = group.tmdb || null;
+  var gy = (tmdb && tmdb.year) || group.year || null;
+  if (identity.year != null && gy != null && identity.year !== gy) return false;
+  var keys = [titleKey(identity.title), identity.originalTitle ? titleKey(identity.originalTitle) : ""];
+  var names = [tmdb && tmdb.title, tmdb && tmdb.originalTitle, group.title, group.originalTitle];
+  for (var i = 0; i < names.length; i++) {
+    if (!names[i]) continue;
+    var nk = titleKey(names[i]);
+    if (nk && (nk === keys[0] || nk === keys[1])) return true;
+  }
+  return false;
+}
+
+/*
+ * 判断目录名是否就是该组影视自己的文件夹。发布目录名的前后缀装饰
+ * （如 "【古早经典剧集】疑犯追踪 (2011) {tmdbid-1411}【蓝光原盘 Remux】"）由解析器剥除。
  * 用于用户直接选中剧集/电影文件夹整理时，避免在其中再嵌套一层「剧名 (年份)」目录。
  */
 function olmDirIsMediaFolder(dirName, group) {
-  var s = String(dirName == null ? "" : dirName).trim();
-  if (!s || !group) return false;
-  s = s.replace(/[\[{【]\s*(tmdb|imdb|tvdb)[^\]}】]*[\]}】]/gi, " ");
-  var year = null;
-  var m = s.match(/^(.*?)[\s.\-_]*[（(\[]?((19|20)\d{2})[）)\]]?[\s.\-_]*$/);
-  if (m && m[1]) { year = parseInt(m[2], 10); s = m[1]; }
-  var key = titleKey(s);
-  if (!key) return false;
+  return olmIdentityMatchesGroup(olmParseDirName(dirName), group);
+}
+
+// 组的规范文件夹名："剧名 (年份) [tmdbid=x]"（与 olmBuildMediaName 的目录层一致，用于根目录改名建议）
+function olmMediaFolderName(group, naming) {
   var tmdb = group.tmdb || null;
-  var gy = (tmdb && tmdb.year) || group.year || null;
-  if (year != null && gy != null && year !== gy) return false;
-  var names = [tmdb && tmdb.title, tmdb && tmdb.originalTitle, group.title, group.originalTitle];
-  for (var i = 0; i < names.length; i++) {
-    if (names[i] && titleKey(names[i]) === key) return true;
+  var title = olmCleanTitle((tmdb && tmdb.title) || group.title);
+  if (!title || title === "_") return null;
+  var idTag = "";
+  if (naming.includeTmdbId && tmdb && tmdb.id != null) {
+    idTag = String(naming.tmdbTag || "[tmdbid={id}]").replace("{id}", tmdb.id);
   }
-  return false;
+  var y = (tmdb && tmdb.year) || group.year;
+  return sanitizeFileName(cleanupName(title + (y ? " (" + y + ")" : "") + (idTag ? " " + idTag : "")));
 }
 
 /*
