@@ -1,5 +1,5 @@
 <script>
-/*! openlist-media v0.1.4 | OpenList 影视智能整理（纯前端脚本）| 安装: OpenList 管理后台→设置→全局→自定义头部/自定义内容 */
+/*! openlist-media v0.1.5 | OpenList 影视智能整理（纯前端脚本）| 安装: OpenList 管理后台→设置→全局→自定义头部/自定义内容 */
 (function () {
 "use strict";
 
@@ -24,7 +24,7 @@
  *                  stats, items, ops: [{t:mkdir|rename|move, ...}], log: [] }
  */
 
-var OLM_VERSION = "0.1.4";
+var OLM_VERSION = "0.1.5";
 
 var OLM_KEYS = {
   settings: "olm.settings",
@@ -542,7 +542,7 @@ function createOpenListClient(opts) {
 var OLM_AD_TLDS = "com|net|org|cn|cc|tv|me|io|co|vip|xyz|top|club|la|life|live|site|online|store|fun|icu|pro|info|app|one|red|run|link|art|ltd|group|work|team|cloud|space|world|today|video|movie|film|fans|wang|xin|shop|host|press|website|win|buzz|cyou|best|lol|pw|tk|ml|ga|cf|gq";
 
 var RE_OLM_URL = new RegExp(
-  "(?:https?://)?(?:www\\.)?[a-z0-9][a-z0-9-]*(?:\\.[a-z0-9-]+)*\\.(?:" + OLM_AD_TLDS + ")(?:/[^\\s\\]】]*)?",
+  "(?:https?://)?(?:www\\.)?[a-z0-9][a-z0-9-]*(?:\\.[a-z0-9-]+)*\\.(?:" + OLM_AD_TLDS + ")(?![a-z0-9-])(?:/[^\\s\\]】]*)?",
   "gi"
 );
 
@@ -1038,6 +1038,7 @@ var OLM_AI_SYSTEM_PROMPT = [
   "- part：上下部/CD1/part2 之类分段号（上=1 下=2），无则 null",
   "- lang：仅字幕文件填 chs|cht|eng|jpn|kor|null（简体/简中/GB→chs，繁体/BIG5→cht，双语/简英→chs）",
   "- confidence：0~1 你的把握程度",
+  "- i 为 -1 的特殊条目是本次扫描的根目录（是目录不是文件）：判断这个目录名指向哪部影视，同样输出 title/original_title/year（剧集目录 type:tv，电影目录 type:movie）；若它不指向某一部影视（如“电视剧”“下载”“合集”这类目录）则 type:unknown、title:null",
   "- items 必须与输入 files 一一对应，不得遗漏或增加，按 i 排列",
   "示例：",
   '输入 {"files":[{"i":0,"path":"凡人修仙传/【高清剧集网发布 www.DDHDTV.com】凡人修仙传[第10集][国语配音+中文字幕].Fan.Ren.Xiu.Xian.Zhuan.2020.S01E10.2160p.WEB-DL.H265.AAC-DDHDTV.mp4","size_mb":1200}]}',
@@ -1545,28 +1546,51 @@ function olmGroupDisplay(group) {
   return t + (y ? " (" + y + ")" : "");
 }
 
+// 解析目录名的影视身份：先剥掉 provider 标记（{tmdbid-1411} 这类花括号形式解析器不认识），再走完整解析
+function olmParseDirName(dirName) {
+  var s = String(dirName == null ? "" : dirName).replace(/[\[{【]\s*(tmdb|imdb|tvdb)[^\]}】]*[\]}】]/gi, " ");
+  return parseNameCore(s);
+}
+
 /*
- * 判断目录名是否就是该组影视自己的文件夹（如 "百花杀（2026）"、"凡人修仙传 (2020) [tmdbid=x]"）：
- * 去掉 provider 标记与结尾年份后，剩余部分须与组的中文名/原名一致，且年份不冲突。
+ * 身份比对：identity（{title, originalTitle, year}，来自目录名解析或 AI）指的是否就是该组影视。
+ * 标题（中文名或原名）与组的 TMDB 中文名/原名/解析名一致，且年份不冲突。
+ */
+function olmIdentityMatchesGroup(identity, group) {
+  if (!identity || !group || !identity.title) return false;
+  var tmdb = group.tmdb || null;
+  var gy = (tmdb && tmdb.year) || group.year || null;
+  if (identity.year != null && gy != null && identity.year !== gy) return false;
+  var keys = [titleKey(identity.title), identity.originalTitle ? titleKey(identity.originalTitle) : ""];
+  var names = [tmdb && tmdb.title, tmdb && tmdb.originalTitle, group.title, group.originalTitle];
+  for (var i = 0; i < names.length; i++) {
+    if (!names[i]) continue;
+    var nk = titleKey(names[i]);
+    if (nk && (nk === keys[0] || nk === keys[1])) return true;
+  }
+  return false;
+}
+
+/*
+ * 判断目录名是否就是该组影视自己的文件夹。发布目录名的前后缀装饰
+ * （如 "【古早经典剧集】疑犯追踪 (2011) {tmdbid-1411}【蓝光原盘 Remux】"）由解析器剥除。
  * 用于用户直接选中剧集/电影文件夹整理时，避免在其中再嵌套一层「剧名 (年份)」目录。
  */
 function olmDirIsMediaFolder(dirName, group) {
-  var s = String(dirName == null ? "" : dirName).trim();
-  if (!s || !group) return false;
-  s = s.replace(/[\[{【]\s*(tmdb|imdb|tvdb)[^\]}】]*[\]}】]/gi, " ");
-  var year = null;
-  var m = s.match(/^(.*?)[\s.\-_]*[（(\[]?((19|20)\d{2})[）)\]]?[\s.\-_]*$/);
-  if (m && m[1]) { year = parseInt(m[2], 10); s = m[1]; }
-  var key = titleKey(s);
-  if (!key) return false;
+  return olmIdentityMatchesGroup(olmParseDirName(dirName), group);
+}
+
+// 组的规范文件夹名："剧名 (年份) [tmdbid=x]"（与 olmBuildMediaName 的目录层一致，用于根目录改名建议）
+function olmMediaFolderName(group, naming) {
   var tmdb = group.tmdb || null;
-  var gy = (tmdb && tmdb.year) || group.year || null;
-  if (year != null && gy != null && year !== gy) return false;
-  var names = [tmdb && tmdb.title, tmdb && tmdb.originalTitle, group.title, group.originalTitle];
-  for (var i = 0; i < names.length; i++) {
-    if (names[i] && titleKey(names[i]) === key) return true;
+  var title = olmCleanTitle((tmdb && tmdb.title) || group.title);
+  if (!title || title === "_") return null;
+  var idTag = "";
+  if (naming.includeTmdbId && tmdb && tmdb.id != null) {
+    idTag = String(naming.tmdbTag || "[tmdbid={id}]").replace("{id}", tmdb.id);
   }
-  return false;
+  var y = (tmdb && tmdb.year) || group.year;
+  return sanitizeFileName(cleanupName(title + (y ? " (" + y + ")" : "") + (idTag ? " " + idTag : "")));
 }
 
 /*
@@ -1744,6 +1768,15 @@ function createPipeline(deps) {
     var parsedList = files.map(function (f) {
       return localParseFile(ctxPath(f.relPath), { sizeMB: f.sizeMB, kind: f.kind, minVideoMB: minVideoMB });
     });
+    // 扫描根目录自己的影视身份（本地解析打底，AI 结果覆盖）：
+    // 用于判断"根目录本身就是某部影视的文件夹"，避免整理时再嵌套一层剧名目录
+    var rootName = segs.length ? segs[segs.length - 1] : "";
+    var dpRoot = olmParseDirName(rootName);
+    var rootParsed = {
+      type: "unknown", title: dpRoot.title, originalTitle: dpRoot.originalTitle,
+      year: dpRoot.year, season: dpRoot.season, episode: null, episodeEnd: null,
+      resolution: null, version: null, part: null, lang: null, confidence: 0.3, from: "local"
+    };
     var aiErrors = [];
     if (s.ai.enabled && s.ai.apiKey && deps.ai) {
       // 只把媒体类文件交给 AI，省 token；junk/meta 扩展名本地即可判定
@@ -1752,6 +1785,9 @@ function createPipeline(deps) {
         if (files[i].kind === "video" || files[i].kind === "subtitle") {
           entries.push({ i: i, path: ctxPath(files[i].relPath), sizeMB: files[i].sizeMB });
         }
+      }
+      if (entries.length && ctx) {
+        entries.push({ i: -1, path: ctx, sizeMB: null }); // 根目录名也交给 AI 识别身份
       }
       if (entries.length) {
         var r = await deps.ai.parseFiles(entries, {
@@ -1769,10 +1805,11 @@ function createPipeline(deps) {
             }
           }
         }
+        if (r.byI[-1]) rootParsed = mergeParsed(r.byI[-1], rootParsed);
       }
     }
     checkCancel();
-    return { parsedList: parsedList, aiErrors: aiErrors };
+    return { parsedList: parsedList, aiErrors: aiErrors, rootParsed: rootParsed };
   }
 
   /* ---- 分组 ---- */
@@ -1937,6 +1974,15 @@ function createPipeline(deps) {
     var roots = resolveRoots(task.root, task.targetDir);
     var junkAction = s.organize.junkAction;
 
+    // 目标根目录的影视身份：扫描根用解析阶段的结果（含 AI 识别），其它目标目录现场解析
+    var identCache = {};
+    function baseIsGroupFolder(base, grp) {
+      var ident;
+      if (base === task.root && task.rootParsed) ident = task.rootParsed;
+      else ident = identCache[base] || (identCache[base] = olmParseDirName(pathName(base)));
+      return olmIdentityMatchesGroup(ident, grp);
+    }
+
     // 先给视频定目标
     var videoByKey = {};   // type|titleKey|season|episode|part → item
     var i, it, g, p;
@@ -1983,7 +2029,7 @@ function createPipeline(deps) {
       }
       var base = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
       // 目标根本身就是这部影视的文件夹（直接整理剧集/电影文件夹）→ 不再嵌套「剧名 (年份)」层
-      var rel = olmDirIsMediaFolder(pathName(base), g) ? built.innerRel : built.folderRel;
+      var rel = baseIsGroupFolder(base, g) ? built.innerRel : built.folderRel;
       it.dstDir = rel ? base + "/" + rel : base;
       it.dstName = it.file.ext ? built.fileBase + "." + it.file.ext : built.fileBase;
       if (it.file.kind === "video" && p.type === "tv") {
@@ -2014,7 +2060,7 @@ function createPipeline(deps) {
         var built2 = olmBuildMediaName(g, p, s.naming);
         if (built2) {
           var base2 = g.type === "movie" ? roots.movieRoot : roots.tvRoot;
-          var rel2 = olmDirIsMediaFolder(pathName(base2), g) ? built2.innerRel : built2.folderRel;
+          var rel2 = baseIsGroupFolder(base2, g) ? built2.innerRel : built2.folderRel;
           it.dstDir = rel2 ? base2 + "/" + rel2 : base2;
           it.dstName = built2.fileBase + lang + "." + it.file.ext;
         } else {
@@ -2045,6 +2091,35 @@ function createPipeline(deps) {
           it.include = true;
           it.status = "ok";
         }
+      }
+    }
+
+    // 根目录改名建议：扫描目录本身就是某部影视的文件夹但名字不规范（如带发布组前后缀装饰）。
+    // 目录名解析出季号的不建议（多为「剧名 第二季」这类季文件夹，不该改成剧名层目录名）。
+    var prevRR = task.rootRename;
+    task.rootRename = null;
+    var rootName = pathName(task.root);
+    var rootIdent = task.rootParsed || olmParseDirName(rootName);
+    if (rootName && rootIdent.season == null) {
+      var rrGroup = null;
+      for (i = 0; i < task.groups.length; i++) {
+        g = task.groups[i];
+        if (g.type !== "movie" && g.type !== "tv") continue;
+        if ((g.type === "movie" ? roots.movieRoot : roots.tvRoot) !== task.root) continue;
+        if (!olmIdentityMatchesGroup(rootIdent, g)) continue;
+        if (!rrGroup || (g.itemIds || []).length > (rrGroup.itemIds || []).length) rrGroup = g;
+      }
+      var wantName = rrGroup ? olmMediaFolderName(rrGroup, s.naming) : null;
+      if (wantName && wantName !== rootName) {
+        task.rootRename = {
+          from: rootName,
+          to: wantName,
+          groupId: rrGroup.id,
+          userExcluded: prevRR ? !!prevRR.userExcluded : false,
+          include: prevRR ? !prevRR.userExcluded : true,
+          status: "ok",
+          reason: ""
+        };
       }
     }
   }
@@ -2108,6 +2183,30 @@ function createPipeline(deps) {
         it.reason = "目标位置已存在同名文件：" + occupantPath;
       }
     }
+
+    // 根目录改名：上级目录里是否已被同名条目占用
+    if (task.rootRename) {
+      var rr = task.rootRename;
+      var parentDir = pathDir(task.root);
+      if (dirs[parentDir] === undefined) {
+        try {
+          var pes = await ol.listAll(parentDir);
+          dirs[parentDir] = pes.map(function (e) { return e.name; });
+        } catch (e3) {
+          dirs[parentDir] = null;
+        }
+      }
+      var sib = dirs[parentDir];
+      if (sib && sib.indexOf(rr.to) !== -1) {
+        rr.status = "conflict";
+        rr.include = false;
+        rr.reason = "上级目录已存在同名条目：" + pathJoin(parentDir, rr.to);
+      } else if (rr.status === "conflict") {
+        rr.status = "ok";
+        rr.include = !rr.userExcluded;
+        rr.reason = "";
+      }
+    }
   }
 
   /* ---- 主流程 ---- */
@@ -2130,6 +2229,8 @@ function createPipeline(deps) {
       createdAt: olmNowIso(),
       root: root,
       targetDir: (o.targetDir == null ? "" : String(o.targetDir).trim().replace(/\/+$/, "")) || null,
+      rootParsed: pr.rootParsed || null,
+      rootRename: null,
       status: "ready",
       groups: gb.groups,
       items: gb.items,
@@ -2317,7 +2418,9 @@ function createExecutor(deps) {
       return it.include && it.status === "ok" &&
         ((it.dstDir && it.dstName) || it.action === "delete");
     });
-    if (!items.length) throw new Error("没有可执行的条目");
+    var rootRen = task.rootRename && task.rootRename.include && task.rootRename.status === "ok"
+      ? task.rootRename : null;
+    if (!items.length && !rootRen) throw new Error("没有可执行的条目");
     task.status = "executing";
     task.startedAt = olmNowIso();
     opSeq = 0;
@@ -2339,7 +2442,7 @@ function createExecutor(deps) {
       if (it.dstDir && it.dstDir !== it.file.dir && !known[it.dstDir]) needDirs[it.dstDir] = true;
     }
     var dirList = Object.keys(needDirs).sort(function (a, b) { return a.length - b.length; });
-    var totalSteps = dirList.length + items.length;
+    var totalSteps = dirList.length + items.length + (rootRen ? 1 : 0);
     var doneSteps = 0;
 
     for (i = 0; i < dirList.length; i++) {
@@ -2588,12 +2691,40 @@ function createExecutor(deps) {
       onProgress({ phase: "exec", done: Math.min(doneSteps, totalSteps), total: totalSteps, note: "删除垃圾文件" });
     }
 
+    /* E. 根目录改名（最后执行；撤销时最先还原，文件操作记录的旧路径因此始终有效） */
+    if (rootRen) {
+      var anyDone = items.some(function (x) { return x.status === "done"; });
+      if (!items.length || anyDone) {
+        try {
+          await writeOp(function () { return ol.rename(task.root, rootRen.to); }, "rename root");
+          task.ops.push({ t: "rename", dir: pathDir(task.root), from: rootRen.from, to: rootRen.to });
+          rootRen.status = "done";
+          task.renamedRoot = pathJoin(pathDir(task.root), rootRen.to);
+          taskLog(task, "目录改名 " + rootRen.from + " → " + rootRen.to);
+        } catch (e) {
+          if (e instanceof OlmAuthError || (e && e.cancelled)) { finish(task, e); throw e; }
+          rootRen.status = "failed";
+          rootRen.reason = "目录改名失败: " + ((e && e.message) || e);
+          taskLog(task, "目录改名失败: " + ((e && e.message) || e));
+        }
+      } else {
+        rootRen.status = "skipped";
+        rootRen.reason = "文件操作无一成功，跳过目录改名";
+        taskLog(task, "跳过目录改名（文件操作无一成功）");
+      }
+      doneSteps++;
+      onProgress({ phase: "exec", done: Math.min(doneSteps, totalSteps), total: totalSteps, note: "目录改名" });
+    }
+
     /* 收尾 */
     finish(task, null);
+    if (rootRen && rootRen.status === "failed") {
+      task.status = items.length ? (task.status === "done" ? "partial" : task.status) : "failed";
+    }
 
     if (s.organize.cleanEmptyDirs && task.status !== "failed") {
       try {
-        await writeOp(function () { return ol.removeEmptyDirectory(task.root); }, "clean empty dirs");
+        await writeOp(function () { return ol.removeEmptyDirectory(task.renamedRoot || task.root); }, "clean empty dirs");
         taskLog(task, "已清理空目录");
       } catch (e) {
         taskLog(task, "清理空目录失败: " + ((e && e.message) || e));
@@ -2705,6 +2836,10 @@ function taskToRecord(task) {
     finishedAt: task.finishedAt || null,
     undoneAt: task.undoneAt || null,
     root: task.root,
+    renamedRoot: task.renamedRoot || null,
+    rootRename: task.rootRename
+      ? { from: task.rootRename.from, to: task.rootRename.to, status: task.rootRename.status, reason: task.rootRename.reason || "" }
+      : null,
     status: task.status,
     stats: task.stats || null,
     groups: (task.groups || [])
@@ -3290,7 +3425,7 @@ function olmRenderOrganize() {
         <input class="olm-input mono" id="olm-target" value="${escHtml(st.targetDir || "")}" placeholder="本次整理的输出目录，如 /网盘/媒体库/剧集" />
         <button class="olm-btn" data-act="pickTargetDir" style="flex:none">浏览…</button>
       </div>
-      <div class="olm-hint">电影/剧集的规范目录会建到这里（垃圾回收站仍在扫描目录内）。整理单个剧集文件夹时，选它的上级目录即可避免套娃。</div>
+      <div class="olm-hint">电影/剧集的规范目录会建到这里（垃圾回收站仍在扫描目录内）。直接整理某部影视自己的文件夹时无需填写：会自动识别并只建 Season 结构，还可顺带把目录名改规范。</div>
     </div>
     <div class="olm-row" style="flex-wrap:wrap;gap:16px;margin-top:4px">
       <label class="olm-switch"><input type="checkbox" data-chg="quickRecursive" ${s.organize.recursive ? "checked" : ""}/> 递归子目录（深度 ${s.organize.maxDepth}）</label>
@@ -3352,6 +3487,21 @@ function olmItemRow(task, it) {
     <td style="width:76px">${olmStatusChip(it)}</td>
     <td style="width:34px">${it.status !== "done" ? `<button class="olm-iconbtn" data-act="editItem" data-id="${it.id}" title="手动编辑目标路径">✎</button>` : ""}</td>
   </tr>`;
+}
+
+// 方案页的「根目录改名」条（识别出扫描目录本身就是该影视的文件夹、但名字不规范时出现）
+function olmRootRenameBanner(task) {
+  var rr = task.rootRename;
+  if (!rr) return "";
+  if (rr.status === "conflict") {
+    return `<div class="olm-banner warn">⚠ 目录名不规范，但无法自动改名：${escHtml(rr.reason)}</div>`;
+  }
+  return `<div class="olm-banner info">
+    <label class="olm-switch" style="margin:0;font-size:13px">
+      <input type="checkbox" data-chg="toggleRootRename" ${rr.include ? "checked" : ""}/>
+      整理完成后把本目录改名为 <b class="path" style="color:#34d399">${escHtml(rr.to)}</b>
+    </label>
+  </div>`;
 }
 
 function olmRenderPlan(st) {
@@ -3423,9 +3573,10 @@ function olmRenderPlan(st) {
     ${stats.excluded ? `<span class="olm-chip gray">跳过 ${stats.excluded}</span>` : ""}
     <span style="flex:1"></span>
     <button class="olm-btn" data-act="backToIdle">← 返回</button>
-    <button class="olm-btn pri" data-act="executePlan" ${stats.included ? "" : "disabled"}>🚀 执行 ${stats.included} 项</button>
+    <button class="olm-btn pri" data-act="executePlan" ${stats.included || (task.rootRename && task.rootRename.include && task.rootRename.status === "ok") ? "" : "disabled"}>🚀 执行 ${stats.included} 项</button>
   </div>
   <div class="olm-hint" style="margin:-6px 0 12px">目录：<span style="color:#94a3b8">${escHtml(task.root)}</span>${task.targetDir ? `　整理到：<span style="color:#34d399">${escHtml(task.targetDir)}</span>` : ""}　勾选=执行；✎ 可手动改目标路径；冲突项需修改或放弃其一。</div>
+  ${olmRootRenameBanner(task)}
   ${groupsHtml || `<div class="olm-empty">没有识别到电影/剧集</div>`}
   ${otherHtml}`;
 }
@@ -3456,6 +3607,8 @@ function olmRenderResult(st) {
   var label = { done: "✓ 整理完成", partial: "⚠ 部分完成", failed: "✕ 执行失败" }[task.status] || task.status;
   return `
   <div class="olm-banner ${cls}" style="font-size:14px">${label}　—　成功 ${stats.done || 0} 项${stats.failed ? "，失败 " + stats.failed + " 项" : ""}</div>
+  ${task.renamedRoot ? `<div class="olm-banner info">📁 目录已改名：<span class="path" style="color:#34d399">${escHtml(task.renamedRoot)}</span></div>` : ""}
+  ${task.rootRename && task.rootRename.status === "failed" ? `<div class="olm-banner warn">⚠ ${escHtml(task.rootRename.reason)}</div>` : ""}
   ${failed.length ? `<div class="olm-card"><b style="font-size:13px;color:#f87171">失败明细</b>
     <table class="olm-items"><tbody>${failed.map(function (it) {
       return `<tr><td style="width:46%"><div class="path">${escHtml(olmRelToRoot(task.root, it.file.dir, it.file.name))}</div></td><td><div class="olm-hint" style="margin:0">${escHtml(it.reason)}</div></td></tr>`;
@@ -3566,6 +3719,14 @@ function olmRefreshPlanAndRender() {
     olmRenderTab();
   });
 }
+
+olmUI.actions.toggleRootRename = function (el) {
+  var task = olmUI.state.organize.task;
+  if (!task || !task.rootRename) return;
+  task.rootRename.include = !!el.checked;
+  task.rootRename.userExcluded = !el.checked;
+  olmRenderTab();
+};
 
 olmUI.actions.toggleItem = function (el) {
   var it = olmFindItem(el.getAttribute("data-id"));
@@ -3742,9 +3903,11 @@ olmUI.actions.executePlan = function () {
   var task = st.task;
   var stats = task.stats || olmComputeStats(task.items);
   var s = olmGetSettings();
+  var willRenameRoot = task.rootRename && task.rootRename.include && task.rootRename.status === "ok";
   olmConfirm({
     title: "确认执行整理",
     html: `将执行 <b style="color:#34d399">${stats.included}</b> 项操作（移动 ${stats.move} / 改名 ${stats.rename}${stats.trash ? " / 回收 " + stats.trash : ""}${stats.del ? " / 删除 " + stats.del : ""}）。<br/>` +
+      (willRenameRoot ? `完成后目录将改名为 <b style="color:#34d399">${escHtml(task.rootRename.to)}</b>。<br/>` : "") +
       (stats.del ? `<b style="color:#f87171">⚠ 其中 ${stats.del} 个垃圾文件将被永久删除，删除无法撤销！</b><br/>` : "") +
       `操作间隔 ${s.exec.intervalMs}ms（网盘限流保护，可在设置调整）。<br/>` +
       `所有操作会记录日志，完成后可整体撤销${stats.del ? "（删除除外）" : ""}。确定执行？`,
@@ -4278,6 +4441,9 @@ var OLM = {
   // 命名
   olmBuildMediaName: olmBuildMediaName,
   olmDirIsMediaFolder: olmDirIsMediaFolder,
+  olmIdentityMatchesGroup: olmIdentityMatchesGroup,
+  olmParseDirName: olmParseDirName,
+  olmMediaFolderName: olmMediaFolderName,
   olmGroupDisplay: olmGroupDisplay,
   // 流水线 / 执行
   createPipeline: createPipeline,
