@@ -56,6 +56,25 @@ function olmSeasonDirEquivalent(name, season) {
   return false;
 }
 
+/*
+ * 检出视频的刮削元数据伴随文件（Emby/Kodi 按同名关联：xxx.nfo、xxx-thumb.jpg、xxx.jpg 等）。
+ * names 为视频所在目录的条目名列表；返回匹配到的文件名数组。
+ * 这些文件一旦与视频不同名即失联，存在时说明目录已刮削、改名需谨慎。
+ */
+function olmScrapedCompanions(videoName, names) {
+  var out = [];
+  if (!videoName || !names || !names.length) return out;
+  var stem = pathStem(videoName);
+  if (!stem) return out;
+  for (var i = 0; i < names.length; i++) {
+    var n = names[i];
+    if (n === videoName || !META_EXTS[pathExt(n)]) continue;
+    var s = pathStem(n);
+    if (s === stem || s.indexOf(stem + "-") === 0) out.push(n);
+  }
+  return out;
+}
+
 // 组的规范文件夹名："剧名 (年份) [tmdbid=x]"（与 olmBuildMediaName 的目录层一致，用于根目录改名建议）
 function olmMediaFolderName(group, naming) {
   var tmdb = group.tmdb || null;

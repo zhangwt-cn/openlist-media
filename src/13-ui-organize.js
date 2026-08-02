@@ -239,6 +239,15 @@ function olmRenderPlan(st) {
   if (task.aiErrors && task.aiErrors.length) banners += `<div class="olm-banner warn">⚠ 部分 AI 解析失败（已回退本地规则）：${escHtml(task.aiErrors[0])}${task.aiErrors.length > 1 ? " 等 " + task.aiErrors.length + " 条" : ""}</div>`;
   var unmatched = mediaGroups.filter(function (g) { return g.matchStatus === "unmatched"; });
   if (unmatched.length) banners += `<div class="olm-banner info">ℹ ${unmatched.length} 个媒体未匹配到 TMDB，命名将使用解析出的标题。可点各组「重新匹配」手动搜索。</div>`;
+  var scraped = task.items.filter(function (x) { return x.scrapedMeta && x.include && (x.action === "move" || x.action === "rename"); });
+  if (scraped.length) {
+    var metaN = 0;
+    scraped.forEach(function (x) { metaN += x.scrapedMeta; });
+    banners += `<div class="olm-banner warn" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="flex:1;min-width:240px">📀 ${scraped.length} 个视频旁有同名刮削元数据（.nfo/缩略图等 ${metaN} 个），说明该目录已刮削、Emby 通常已能直接识别；改名/移动后这些元数据会失联，需重新刮削。若媒体库显示正常，建议保持原样不处理。</span>
+      <button class="olm-btn sm" data-act="excludeScraped" style="flex:none">排除这些视频及字幕</button>
+    </div>`;
+  }
 
   var groupsHtml = mediaGroups.map(function (g) {
     var items = byGroup[g.id] || [];
@@ -486,6 +495,34 @@ olmUI.actions.toggleGroup = function (el) {
     else if (it.dstDir && it.dstName) { it.status = "ok"; it.reason = ""; }
     else if (it.action === "delete") { it.status = "ok"; it.reason = "垃圾文件 → 删除（不可恢复）"; }
   });
+  olmRefreshPlanAndRender();
+};
+
+// 已刮削视频一键排除：连同配对字幕一起保持原名（元数据/外挂字幕都靠同名关联）
+olmUI.actions.excludeScraped = function () {
+  var task = olmUI.state.organize.task;
+  if (!task) return;
+  function pairKey(x) {
+    var p = x.parsed || {};
+    return x.groupId + "|" + (p.season == null ? "" : p.season) + "|" + (p.episode == null ? "" : p.episode) + "|" + (p.part || "");
+  }
+  var keys = {};
+  task.items.forEach(function (it) {
+    if (it.scrapedMeta && it.include && (it.action === "move" || it.action === "rename")) keys[pairKey(it)] = 1;
+  });
+  var n = 0;
+  task.items.forEach(function (it) {
+    if (!it.include || it.status === "done" || it.status === "failed") return;
+    var hit = (it.scrapedMeta && (it.action === "move" || it.action === "rename")) ||
+      (it.file.kind === "subtitle" && keys[pairKey(it)]);
+    if (!hit) return;
+    it.userExcluded = true;
+    it.include = false;
+    it.status = "excluded";
+    it.reason = "已刮削（同名 nfo/缩略图），保持原名";
+    n++;
+  });
+  if (n) olmToast("已排除 " + n + " 项，保持原文件名", "ok");
   olmRefreshPlanAndRender();
 };
 

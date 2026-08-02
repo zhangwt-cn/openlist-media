@@ -851,6 +851,40 @@ async function testRootFolderRename() {
   ok(!task3.rootRename.include, "冲突项不勾选");
 }
 
+/* ---------- 已刮削检测 ---------- */
+async function testScrapedDetect() {
+  section("scraped metadata detect");
+  var names = ["A.S01E01.mkv", "A.S01E01.nfo", "A.S01E01-thumb.jpg", "A.S01E01.chs.srt", "A.S01E02.nfo", "folder.jpg", "tvshow.nfo"];
+  var c = O.olmScrapedCompanions("A.S01E01.mkv", names);
+  eq(c.length, 2, "同名 nfo + -thumb 图片");
+  ok(c.indexOf("A.S01E01.nfo") !== -1 && c.indexOf("A.S01E01-thumb.jpg") !== -1, "命中的伴随文件");
+  eq(O.olmScrapedCompanions("A.S01E02.mkv", names).length, 1, "另一集只有 nfo");
+  eq(O.olmScrapedCompanions("B.mkv", names).length, 0, "无伴随文件");
+  eq(O.olmScrapedCompanions("A.S01E01.mkv", ["A.S01E010.nfo", "A.S01E01x-thumb.jpg"]).length, 0, "前缀相似但不同名不算");
+  eq(O.olmScrapedCompanions("A.S01E01.mkv", null).length, 0, "无目录列表不炸");
+
+  var root = "/media/TV5/疑犯追踪 (2011)";
+  var fake = makeFakeOl((function () {
+    var m = {};
+    m[root + "/Season 01/Person.of.Interest.S01E01.1080p.mkv"] = 2000 * 1048576;
+    m[root + "/Season 01/Person.of.Interest.S01E01.1080p.nfo"] = 3000;
+    m[root + "/Season 01/Person.of.Interest.S01E01.1080p-thumb.jpg"] = 200000;
+    m[root + "/Season 01/Person.of.Interest.S01E02.1080p.mkv"] = 2000 * 1048576;
+    return m;
+  })());
+  var S = testSettings();
+  var pipe = O.createPipeline({ ol: fake, ai: null, tmdb: null, getSettings: function () { return S; } });
+  var task = await pipe.organize(root, {});
+  var e1 = null, e2 = null;
+  task.items.forEach(function (x) {
+    if (/S01E01.*\.mkv$/.test(x.file.name)) e1 = x;
+    if (/S01E02/.test(x.file.name)) e2 = x;
+  });
+  eq(e1.scrapedMeta, 2, "E01 检出 2 个刮削伴随文件");
+  eq(e2.scrapedMeta, 0, "E02 无伴随文件");
+  ok(e1.include && e1.action === "rename", "默认仍在计划内，由用户决定是否排除");
+}
+
 /* ---------- run ---------- */
 async function main() {
   testUtils();
@@ -865,6 +899,7 @@ async function main() {
   await testTrashMode();
   await testTargetDirAndDelete();
   await testRootFolderRename();
+  await testScrapedDetect();
   print("ALL TESTS PASSED (" + __n + " assertions)");
 }
 

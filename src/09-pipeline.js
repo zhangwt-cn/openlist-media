@@ -467,6 +467,15 @@ function createPipeline(deps) {
       }
     }
 
+    // 已刮削检测：视频旁存在同名 .nfo / 同名-后缀 图片（Emby 按文件名关联），
+    // 改名或移动会使这些刮削数据失联，计划页据此提示可保持原样
+    for (i = 0; i < task.items.length; i++) {
+      it = task.items[i];
+      it.scrapedMeta = it.file.kind === "video" && (it.parsed.type === "tv" || it.parsed.type === "movie")
+        ? olmScrapedCompanions(it.file.name, (task._dirs || {})[it.file.dir]).length
+        : 0;
+    }
+
     // 季目录规范化改名清单（保留用户此前的勾选状态）
     var prevDR = task.dirRenames || [];
     task.dirRenames = Object.keys(dirRenamesMap).map(function (key) {
