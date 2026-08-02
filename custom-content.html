@@ -1,5 +1,5 @@
 <script>
-/*! openlist-media v0.1.6 | OpenList 影视智能整理（纯前端脚本）| 安装: OpenList 管理后台→设置→全局→自定义头部/自定义内容 */
+/*! openlist-media v0.1.7 | OpenList 影视智能整理（纯前端脚本）| 安装: OpenList 管理后台→设置→全局→自定义头部/自定义内容 */
 (function () {
 "use strict";
 
@@ -24,7 +24,7 @@
  *                  stats, items, ops: [{t:mkdir|rename|move, ...}], log: [] }
  */
 
-var OLM_VERSION = "0.1.6";
+var OLM_VERSION = "0.1.7";
 
 var OLM_KEYS = {
   settings: "olm.settings",
@@ -1591,6 +1591,25 @@ function olmSeasonDirEquivalent(name, season) {
   return false;
 }
 
+/*
+ * 检出视频的刮削元数据伴随文件（Emby/Kodi 按同名关联：xxx.nfo、xxx-thumb.jpg、xxx.jpg 等）。
+ * names 为视频所在目录的条目名列表；返回匹配到的文件名数组。
+ * 这些文件一旦与视频不同名即失联，存在时说明目录已刮削、改名需谨慎。
+ */
+function olmScrapedCompanions(videoName, names) {
+  var out = [];
+  if (!videoName || !names || !names.length) return out;
+  var stem = pathStem(videoName);
+  if (!stem) return out;
+  for (var i = 0; i < names.length; i++) {
+    var n = names[i];
+    if (n === videoName || !META_EXTS[pathExt(n)]) continue;
+    var s = pathStem(n);
+    if (s === stem || s.indexOf(stem + "-") === 0) out.push(n);
+  }
+  return out;
+}
+
 // 组的规范文件夹名："剧名 (年份) [tmdbid=x]"（与 olmBuildMediaName 的目录层一致，用于根目录改名建议）
 function olmMediaFolderName(group, naming) {
   var tmdb = group.tmdb || null;
@@ -2127,6 +2146,15 @@ function createPipeline(deps) {
           it.status = "ok";
         }
       }
+    }
+
+    // 已刮削检测：视频旁存在同名 .nfo / 同名-后缀 图片（Emby 按文件名关联），
+    // 改名或移动会使这些刮削数据失联，计划页据此提示可保持原样
+    for (i = 0; i < task.items.length; i++) {
+      it = task.items[i];
+      it.scrapedMeta = it.file.kind === "video" && (it.parsed.type === "tv" || it.parsed.type === "movie")
+        ? olmScrapedCompanions(it.file.name, (task._dirs || {})[it.file.dir]).length
+        : 0;
     }
 
     // 季目录规范化改名清单（保留用户此前的勾选状态）
@@ -3658,6 +3686,15 @@ function olmRenderPlan(st) {
   if (task.aiErrors && task.aiErrors.length) banners += `<div class="olm-banner warn">⚠ 部分 AI 解析失败（已回退本地规则）：${escHtml(task.aiErrors[0])}${task.aiErrors.length > 1 ? " 等 " + task.aiErrors.length + " 条" : ""}</div>`;
   var unmatched = mediaGroups.filter(function (g) { return g.matchStatus === "unmatched"; });
   if (unmatched.length) banners += `<div class="olm-banner info">ℹ ${unmatched.length} 个媒体未匹配到 TMDB，命名将使用解析出的标题。可点各组「重新匹配」手动搜索。</div>`;
+  var scraped = task.items.filter(function (x) { return x.scrapedMeta && x.include && (x.action === "move" || x.action === "rename"); });
+  if (scraped.length) {
+    var metaN = 0;
+    scraped.forEach(function (x) { metaN += x.scrapedMeta; });
+    banners += `<div class="olm-banner warn" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="flex:1;min-width:240px">📀 ${scraped.length} 个视频旁有同名刮削元数据（.nfo/缩略图等 ${metaN} 个），说明该目录已刮削、Emby 通常已能直接识别；改名/移动后这些元数据会失联，需重新刮削。若媒体库显示正常，建议保持原样不处理。</span>
+      <button class="olm-btn sm" data-act="excludeScraped" style="flex:none">排除这些视频及字幕</button>
+    </div>`;
+  }
 
   var groupsHtml = mediaGroups.map(function (g) {
     var items = byGroup[g.id] || [];
@@ -3905,6 +3942,34 @@ olmUI.actions.toggleGroup = function (el) {
     else if (it.dstDir && it.dstName) { it.status = "ok"; it.reason = ""; }
     else if (it.action === "delete") { it.status = "ok"; it.reason = "垃圾文件 → 删除（不可恢复）"; }
   });
+  olmRefreshPlanAndRender();
+};
+
+// 已刮削视频一键排除：连同配对字幕一起保持原名（元数据/外挂字幕都靠同名关联）
+olmUI.actions.excludeScraped = function () {
+  var task = olmUI.state.organize.task;
+  if (!task) return;
+  function pairKey(x) {
+    var p = x.parsed || {};
+    return x.groupId + "|" + (p.season == null ? "" : p.season) + "|" + (p.episode == null ? "" : p.episode) + "|" + (p.part || "");
+  }
+  var keys = {};
+  task.items.forEach(function (it) {
+    if (it.scrapedMeta && it.include && (it.action === "move" || it.action === "rename")) keys[pairKey(it)] = 1;
+  });
+  var n = 0;
+  task.items.forEach(function (it) {
+    if (!it.include || it.status === "done" || it.status === "failed") return;
+    var hit = (it.scrapedMeta && (it.action === "move" || it.action === "rename")) ||
+      (it.file.kind === "subtitle" && keys[pairKey(it)]);
+    if (!hit) return;
+    it.userExcluded = true;
+    it.include = false;
+    it.status = "excluded";
+    it.reason = "已刮削（同名 nfo/缩略图），保持原名";
+    n++;
+  });
+  if (n) olmToast("已排除 " + n + " 项，保持原文件名", "ok");
   olmRefreshPlanAndRender();
 };
 
@@ -4636,6 +4701,7 @@ var OLM = {
   olmParseDirName: olmParseDirName,
   olmMediaFolderName: olmMediaFolderName,
   olmSeasonDirEquivalent: olmSeasonDirEquivalent,
+  olmScrapedCompanions: olmScrapedCompanions,
   olmGroupDisplay: olmGroupDisplay,
   // 流水线 / 执行
   createPipeline: createPipeline,
